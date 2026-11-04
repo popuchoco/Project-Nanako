@@ -4,3 +4,119 @@
 @media(max-width:760px){.media-player-layout{grid-template-columns:1fr}.player-stage{min-height:260px}.player-queue{max-height:280px}.album-grid{grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px}}
 .compatibility-card{margin-top:20px}.compatibility-card .content-heading{margin-bottom:12px}.compatibility-card h3,.computer-card h3{font-size:15px;margin:0 0 7px}.runtime-note{font-size:12px;color:var(--muted);margin:0 0 12px}.compatibility-table-wrap{max-height:380px;min-height:0;border:1px solid var(--line);border-radius:8px}.compatibility-table-wrap th,.compatibility-table-wrap td{padding:10px 12px}.compatibility-table-wrap td:last-child{width:auto;text-align:left}.support-pill{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:650;white-space:nowrap;background:#edf1f2;color:#52636b}.support-pill.support-yes{background:#e3f3ed;color:#17684f}.support-pill.support-maybe{background:#fff3d9;color:#8a651c}.support-pill.support-no{background:#f6e8e5;color:#963f34}.media-test-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:16px}.media-test-controls .field-inline{display:grid;align-items:start;gap:7px}.media-test-controls input[type=file]{max-width:min(480px,70vw);font-size:12px}.media-test-probe{position:fixed;left:-2px;bottom:0;width:1px;height:1px;opacity:.01;pointer-events:none}.media-test-result-success{color:#17684f!important}.media-test-result-error{color:var(--danger)!important}.computer-card{margin-bottom:16px}.computer-card>.muted{max-width:800px;margin-bottom:14px}.library-grid,.drive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:14px}.library-tile,.drive-tile{display:grid;gap:8px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:8px;background:#fff}.library-tile strong,.drive-tile strong{font-size:13px}.library-tile small,.drive-tile small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.library-tile .button,.drive-tile .button{justify-self:start}.library-list{display:grid}.library-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px 0;border-top:1px solid #edf1f2}.library-row>div{display:grid;gap:4px;min-width:0}.library-row strong{font-size:13px}.library-row small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.library-row .button{flex:none}.system-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;max-width:1120px}.system-card{grid-column:span 6;background:#fff;border:1px solid var(--line);border-radius:9px;padding:18px}.system-card.system-card-wide{grid-column:span 12}.system-card h3{font-size:14px;margin:0 0 14px}.system-facts{display:grid;grid-template-columns:minmax(110px,.7fr) minmax(0,1.3fr);gap:10px 14px;margin:0}.system-facts dt{font-size:12px;color:var(--muted)}.system-facts dd{font-size:12px;margin:0;overflow-wrap:anywhere}.system-meter{display:flex;align-items:center;gap:12px}.system-meter-track{height:8px;flex:1;overflow:hidden;border-radius:99px;background:#e7edef}.system-meter-fill{height:100%;border-radius:inherit;background:var(--accent)}.system-meter strong{min-width:42px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums}.system-interface-list{display:grid;gap:8px}.system-interface{display:grid;grid-template-columns:minmax(100px,.7fr) minmax(0,1.3fr);gap:6px 14px;border-top:1px solid #edf1f2;padding:10px 0}.system-interface strong{font-size:12px}.system-interface span{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.system-error{color:var(--danger)}
 @media(max-width:760px){.system-card,.system-card.system-card-wide{grid-column:span 12}.system-facts{grid-template-columns:105px minmax(0,1fr)}.library-row{align-items:flex-start;flex-direction:column}.compatibility-table-wrap{max-height:320px}.media-test-controls{align-items:stretch;flex-direction:column}.media-test-controls .button{align-self:flex-start}}
+
+/* Nanako desktop simulation: every shell element is rendered inside the app window. */
+.desktop-shell.app-shell{display:flex;flex-direction:column;width:100%;height:100vh;min-height:560px;overflow:hidden;background:#0e5482;color:#152432}
+.system-bar{height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(17,65,103,.94);color:#f4f8fb;box-shadow:0 1px 0 rgba(255,255,255,.12);z-index:5}
+.system-bar-start,.system-bar-end{height:100%;display:flex;align-items:center;gap:7px}
+.system-bar-button,.taskbar-app{height:30px;min-width:32px;border:0;border-radius:5px;background:transparent;color:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 8px}
+.system-bar-button:hover,.taskbar-app:hover,.taskbar-app.active{background:rgba(255,255,255,.16)}
+.system-bar-label{font-size:12px;font-weight:650;letter-spacing:.02em}
+.nanako-mark{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;background:#f2b84b;color:#253950;font-size:13px;font-weight:800;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45)}
+.system-bar-divider{height:18px;width:1px;background:rgba(255,255,255,.28);margin:0 4px}
+.taskbar-app{width:32px;color:#e8f5ff;font-size:17px}
+.taskbar-folder{width:18px;height:13px;border-radius:3px;background:#ffc14f;position:relative;display:inline-block;box-shadow:inset 0 -2px 0 rgba(169,108,13,.2)}
+.taskbar-folder::before{content:"";position:absolute;top:-3px;left:2px;width:8px;height:5px;border-radius:2px 2px 0 0;background:#ffd780}
+.system-local-status{display:flex;align-items:center;gap:7px;padding:0 7px;font-size:11px;color:#d8eafa}
+.system-local-status .status-dot{width:7px;height:7px}
+.desktop-clock{font-size:11px;font-variant-numeric:tabular-nums;min-width:94px;text-align:center;color:#eff7fc}
+.account-chip{font-size:11px;max-width:170px;overflow:hidden}
+.account-chip .account-name{max-width:112px;color:#f4f8fb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-avatar{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:#d5e5f2;color:#244560;font-size:10px;font-weight:700}
+.system-settings{font-size:16px;width:30px}
+.desktop-area{position:relative;isolation:isolate;flex:1;min-height:0;overflow:hidden;background:linear-gradient(180deg,#0a5b92 0%,#277bb0 47%,#b0d7ea 100%)}
+.desktop-area::before,.desktop-area::after{content:"";position:absolute;z-index:-1;pointer-events:none}
+.desktop-area::before{left:-8%;right:-8%;bottom:-27%;height:64%;border-radius:48% 52% 0 0 / 18% 24% 0 0;background:linear-gradient(168deg,rgba(16,68,105,.9),rgba(21,101,145,.92) 48%,rgba(153,206,229,.9));transform:rotate(-3deg);box-shadow:0 -18px 60px rgba(209,238,250,.18)}
+.desktop-area::after{left:28%;right:-18%;bottom:-30%;height:46%;border-radius:50% 44% 0 0 / 28% 26% 0 0;background:linear-gradient(178deg,rgba(213,238,249,.78),rgba(81,153,194,.2) 35%,rgba(10,58,94,.72));transform:rotate(7deg);filter:blur(7px)}
+.desktop-shortcuts{position:absolute;z-index:1;left:20px;top:24px;bottom:78px;width:88px;display:flex;flex-direction:column;align-items:center;gap:10px;overflow:auto;scrollbar-width:thin}
+.desktop-icon{width:82px;min-height:94px;border:1px solid transparent;border-radius:7px;padding:8px 4px 6px;background:transparent;color:#fff;text-shadow:0 1px 3px rgba(0,27,52,.7);display:grid;align-content:start;justify-items:center;gap:8px;font-size:11px}
+.desktop-icon:hover,.desktop-icon:focus-visible{background:rgba(199,232,250,.2);border-color:rgba(235,248,255,.45)}
+.desktop-icon-art{width:52px;height:52px;display:grid;place-items:center;position:relative;filter:drop-shadow(0 6px 8px rgba(0,35,63,.25))}
+.folder-art{width:48px;height:34px;margin-top:10px;border-radius:8px;background:linear-gradient(180deg,#ffe18c,#ffb735);box-shadow:inset 0 -4px 0 rgba(194,124,21,.22)}
+.folder-art::before{content:"";position:absolute;left:4px;top:-8px;width:20px;height:12px;border-radius:5px 5px 0 0;background:#ffd36a}
+.folder-art>span{position:absolute;left:4px;right:4px;top:8px;height:7px;border-radius:4px;background:rgba(255,248,218,.65)}
+.computer-art{width:48px;height:38px;margin-top:7px;border:4px solid #edf5fa;border-radius:7px;background:linear-gradient(140deg,#cce6f5,#718faa);box-shadow:inset 0 0 0 2px #a8c4d8}
+.computer-art::after{content:"";position:absolute;width:26px;height:4px;bottom:-9px;border-radius:4px;background:#e1edf4;box-shadow:0 4px 0 -1px #bbcddb}
+.computer-art>span{width:18px;height:12px;border:1px solid rgba(42,82,108,.45);background:rgba(255,255,255,.22)}
+.trash-art{width:45px;height:45px;margin-top:2px;border-radius:12px;background:linear-gradient(145deg,#f3f7fa,#aebdc7);color:#637786;font-size:22px;box-shadow:inset 0 0 0 3px rgba(255,255,255,.7)}
+.album-art{width:45px;height:45px;margin-top:2px;border-radius:12px;background:#fff;box-shadow:inset 0 0 0 1px rgba(10,46,69,.08)}
+.album-art>span,.album-art>i{position:absolute;width:18px;height:18px;border-radius:50%;background:#42d8b7;left:10px;top:8px;box-shadow:12px 6px 0 #69b7fa,4px 17px 0 #ffd45c,-4px 10px 0 #d795f7}
+.album-art>i{transform:translate(7px,2px) scale(.7);background:#ff8298;opacity:.8}
+.player-art{width:45px;height:45px;margin-top:2px;border-radius:13px;background:linear-gradient(145deg,#54cdf4,#3287ed);color:white;font-size:17px;box-shadow:inset 0 0 0 2px rgba(255,255,255,.5)}
+.app-window{position:absolute;z-index:2;left:clamp(116px,18vw,264px);top:clamp(28px,7vh,62px);width:min(980px,calc(100% - 310px));height:min(690px,calc(100% - 112px));min-width:700px;min-height:440px;display:flex;flex-direction:column;border:1px solid rgba(231,240,246,.94);border-radius:14px;background:#f2f5fa;box-shadow:0 24px 62px rgba(1,27,47,.27),0 4px 16px rgba(10,42,61,.12);overflow:hidden;transition:box-shadow .16s ease}
+.app-window.is-maximized{left:8px!important;top:8px!important;width:calc(100% - 16px)!important;height:calc(100% - 70px)!important;border-radius:9px}
+.window-titlebar{height:44px;flex:none;display:flex;align-items:center;justify-content:center;padding:0 12px;position:relative;user-select:none;cursor:grab;color:#4b5967}
+.window-titlebar:active{cursor:grabbing}
+.window-app-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;pointer-events:none}
+.window-title-icon{width:16px;height:16px;border-radius:4px;background:#dbe8f1;color:#536d83;display:grid;place-items:center;font-size:11px}
+.window-controls{position:absolute;right:8px;top:5px;height:32px;display:flex;align-items:center;gap:3px}
+.window-control{width:34px;height:30px;border:0;border-radius:5px;background:transparent;color:#44515d;font-size:17px;display:grid;place-items:center}
+.window-control:hover{background:#e2e9f0}
+.window-close:hover{background:#dc4f4a;color:#fff}
+.window-app-body{height:calc(100% - 44px);min-height:0;display:grid;grid-template-columns:178px minmax(0,1fr);border-top:1px solid #e8edf2;background:#fff}
+.app-window .sidebar{height:auto;min-height:0;position:relative;top:auto;overflow:auto;background:#f0f3f8;color:#263542;padding:21px 12px 12px}
+.app-window .sidebar-label{padding:0 12px 10px;color:#8b98a6;font-size:10px;letter-spacing:.08em;text-transform:none}
+.app-window .sidebar nav{gap:3px}
+.app-window .nav-item{min-height:38px;padding:8px 10px;gap:9px;border-radius:6px;color:#4e5d6b;font-size:12px}
+.app-window .nav-item:hover{background:#e6ecf4;color:#1c2d3c}
+.app-window .nav-item.active{background:#fff;color:#1262bb;box-shadow:inset 2px 0 0 #1672dd}
+.app-window .nav-glyph{font-size:14px;color:#8091a2;width:17px}
+.app-window .nav-item.active .nav-glyph{color:#1672dd}
+.app-window .sidebar-bottom{gap:9px;padding:12px 10px 4px}
+.app-window .local-badge{font-size:10px;color:#5d6c79}
+.app-window .build-label{font-size:10px;color:#84909c}
+.app-window .workspace{height:100%;min-height:0;overflow:auto;padding:20px 25px 18px;background:#fff}
+.app-window .topbar{margin:0 0 17px;padding:0 0 12px;border-bottom:1px solid #ebeff3}
+.app-window .topbar .eyebrow{font-size:10px;letter-spacing:.04em;text-transform:none;margin-bottom:3px}
+.app-window .topbar h1{font-size:19px;color:#243746}
+.app-window .account-tools{gap:4px}
+.app-window .account-tools .button{font-size:11px;padding:0 8px;min-height:30px}
+.app-window .content-heading{margin-bottom:15px;align-items:center}
+.app-window .content-heading h2{font-size:16px}
+.app-window .content-heading .muted{max-width:640px;font-size:11px}
+.app-window .button{min-height:34px;padding:0 11px;font-size:11px}
+.app-window .file-controls{padding:11px 0}
+.app-window .field-inline{font-size:11px}
+.app-window .field-inline select{height:34px;font-size:11px}
+.app-window .table-wrap{min-height:140px}
+.app-window th{font-size:10px;padding:10px 12px}
+.app-window td{font-size:11px;padding:11px 12px}
+.app-window .item-name button{font-size:11px}
+.app-window .footer-note{font-size:10px;margin-top:20px;padding-top:10px}
+.desktop-dock{position:absolute;z-index:4;left:50%;bottom:10px;transform:translateX(-50%);height:52px;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid rgba(255,255,255,.42);border-radius:13px;background:rgba(237,246,252,.78);box-shadow:0 8px 28px rgba(4,35,57,.22);backdrop-filter:blur(18px)}
+.dock-app,.dock-launcher{position:relative;width:38px;height:38px;border:0;border-radius:8px;display:grid;place-items:center;background:transparent;color:#416078}
+.dock-app:hover,.dock-launcher:hover{background:rgba(255,255,255,.72)}
+.dock-app.active{background:rgba(255,255,255,.8)}
+.dock-app>i{position:absolute;width:4px;height:4px;border-radius:50%;left:50%;bottom:2px;transform:translateX(-50%);background:#478ed5}
+.dock-app:not(.running)>i{opacity:0}
+.dock-launcher{font-size:21px}
+.dock-separator{width:1px;height:24px;background:rgba(76,105,126,.25)}
+.launcher-menu{position:absolute;z-index:6;left:14px;bottom:76px;width:min(370px,calc(100% - 28px));padding:15px;border:1px solid rgba(255,255,255,.7);border-radius:13px;background:rgba(246,250,253,.96);box-shadow:0 18px 46px rgba(0,31,54,.32);backdrop-filter:blur(20px)}
+.launcher-heading{display:flex;align-items:center;gap:10px;padding:2px 2px 13px;border-bottom:1px solid #dfe8ee}
+.launcher-heading>div{display:grid;gap:3px;min-width:0;flex:1}
+.launcher-heading strong{font-size:12px;color:#273e51}
+.launcher-heading small{font-size:10px;color:#778a99}
+.launcher-heading .button{min-height:30px;font-size:10px;padding:0 9px}
+.launcher-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:12px 0}
+.launcher-grid>button{min-height:78px;border:1px solid transparent;border-radius:8px;background:transparent;color:#40586b;display:grid;place-items:center;align-content:center;gap:7px;font-size:10px}
+.launcher-grid>button:hover{background:#e8f1f8;border-color:#d6e4ef}
+.launcher-icon{width:34px;height:34px;display:grid;place-items:center;position:relative;filter:drop-shadow(0 3px 4px rgba(38,68,90,.16))}
+.launcher-icon.folder-art{width:30px;height:22px;margin-top:6px;border-radius:5px}
+.launcher-icon.folder-art::before{top:-5px;width:13px;height:8px}
+.launcher-icon.folder-art>span{top:5px;height:5px}
+.launcher-icon.computer-art{width:30px;height:24px;margin-top:4px;border-width:3px;border-radius:4px}
+.launcher-icon.computer-art::after{width:16px;bottom:-6px;height:3px}
+.launcher-icon.computer-art>span{width:11px;height:8px}
+.launcher-icon.trash-art,.launcher-icon.album-art,.launcher-icon.player-art,.launcher-icon.settings-art{width:32px;height:32px;margin:0;border-radius:8px}
+.launcher-icon.trash-art{font-size:15px}
+.launcher-icon.album-art>span,.launcher-icon.album-art>i{width:12px;height:12px;left:7px;top:5px;box-shadow:8px 4px 0 #69b7fa,3px 12px 0 #ffd45c,-3px 7px 0 #d795f7}
+.launcher-icon.album-art>i{transform:translate(5px,1px) scale(.7)}
+.launcher-icon.player-art{font-size:12px}
+.launcher-icon.settings-art{background:#dce8f1;color:#667e90;font-size:18px}
+.launcher-footer{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #dfe8ee;padding:11px 2px 1px;color:#7a8a97;font-size:9px}
+.launcher-footer span:first-child{display:flex;align-items:center;gap:6px;color:#4c6d68}
+.launcher-footer .status-dot{width:6px;height:6px}
+.desktop-shell button:focus-visible{outline:2px solid #ffd25b;outline-offset:2px}
+@media(max-width:900px){.desktop-shortcuts{left:10px;width:76px}.desktop-icon{width:72px;min-height:82px;font-size:10px}.desktop-icon-art{transform:scale(.86)}.app-window{left:91px;width:calc(100% - 105px);min-width:0}.window-app-body{grid-template-columns:154px minmax(0,1fr)}.app-window .workspace{padding:17px 17px 14px}.app-window .sidebar{padding:17px 9px 9px}}
+@media(max-width:620px){.desktop-shell.app-shell{min-height:500px}.system-bar{padding:0 6px}.system-bar-label,.system-local-status,.desktop-clock{display:none}.system-bar-start,.system-bar-end{gap:3px}.app-window{left:7px;top:48px;width:calc(100% - 14px);height:calc(100% - 120px);min-height:0;border-radius:10px}.window-app-body{grid-template-columns:54px minmax(0,1fr)}.app-window .sidebar{padding:10px 4px}.app-window .sidebar-label,.app-window .sidebar-bottom{display:none}.app-window .sidebar nav{gap:3px}.app-window .nav-item{justify-content:center;min-height:40px;padding:8px 3px;font-size:0;gap:0}.app-window .nav-glyph{width:auto;font-size:17px}.app-window .workspace{padding:14px 12px 12px}.app-window .topbar h1{font-size:17px}.app-window .topbar .eyebrow{display:none}.app-window .content-heading{align-items:flex-start;flex-direction:column;gap:10px}.app-window .toolbar{width:100%}.app-window .toolbar .button{flex:1}.app-window .management-grid{grid-template-columns:1fr}.app-window .file-controls{align-items:flex-start;flex-direction:column;gap:10px}.app-window .field-inline{width:100%;justify-content:space-between}.app-window .field-inline select{flex:1;min-width:0}.desktop-shortcuts{left:auto;right:10px;top:8px;bottom:66px;width:auto;max-width:calc(100% - 20px);flex-direction:row;align-items:flex-start;gap:3px;overflow-x:auto;overflow-y:hidden}.desktop-icon{width:60px;min-width:60px;min-height:56px;padding:3px 2px;font-size:9px;gap:0}.desktop-icon-art{display:none}.desktop-dock{bottom:7px;height:46px}.launcher-menu{bottom:64px}.launcher-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.launcher-grid>button{min-height:65px}.launcher-footer{font-size:8px}.app-window.is-maximized{left:5px!important;top:42px!important;width:calc(100% - 10px)!important;height:calc(100% - 105px)!important}}
+@media(prefers-reduced-motion:reduce){.app-window,.desktop-icon,.launcher-grid>button{transition:none!important;scroll-behavior:auto!important}}

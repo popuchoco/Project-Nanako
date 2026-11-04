@@ -24,11 +24,44 @@
     </section>
   </main>
 
-  <div id="app-shell" class="app-shell" hidden>
+  <div id="app-shell" class="app-shell desktop-shell" hidden>
+    <header class="system-bar" aria-label="Nanako 桌面工作列">
+      <div class="system-bar-start">
+        <button id="launcher-toggle" class="system-bar-button launcher-trigger" type="button" aria-label="開啟應用程式選單" aria-expanded="false" aria-controls="launcher-menu"><span class="nanako-mark" aria-hidden="true">N</span><span class="system-bar-label">Nanako</span></button>
+        <span class="system-bar-divider" aria-hidden="true"></span>
+        <button class="taskbar-app active" data-open-view="files" type="button" aria-label="切換至檔案管理" title="檔案管理"><span class="taskbar-folder" aria-hidden="true"></span></button>
+        <button class="taskbar-app admin-only" data-open-view="system" type="button" aria-label="切換至電腦資訊" title="電腦資訊"><span aria-hidden="true">⚙</span></button>
+      </div>
+      <div class="system-bar-end">
+        <span class="system-local-status"><i class="status-dot" aria-hidden="true"></i><span>本機</span></span>
+        <span id="desktop-clock" class="desktop-clock" aria-label="目前時間"></span>
+        <button id="desktop-account" class="system-bar-button account-chip" type="button" aria-label="帳號選項"><span class="account-avatar" aria-hidden="true">用</span><span id="account-name" class="account-name"></span></button>
+        <button id="desktop-settings" class="system-bar-button system-settings admin-only" data-open-view="system" type="button" aria-label="電腦資訊" title="電腦資訊">⚙</button>
+      </div>
+    </header>
+
+    <main id="desktop-area" class="desktop-area" aria-label="Nanako 桌面">
+      <div class="desktop-shortcuts" aria-label="桌面捷徑">
+        <button class="desktop-icon" data-open-view="files" type="button"><span class="desktop-icon-art folder-art" aria-hidden="true"><span></span></span><span>檔案管理</span></button>
+        <button class="desktop-icon" data-open-view="computer" type="button"><span class="desktop-icon-art computer-art" aria-hidden="true"><span></span></span><span>我的電腦</span></button>
+        <button class="desktop-icon" data-open-view="trash" type="button"><span class="desktop-icon-art trash-art" aria-hidden="true">▤</span><span>資源回收桶</span></button>
+        <button class="desktop-icon" data-open-view="album" type="button"><span class="desktop-icon-art album-art" aria-hidden="true"><span></span><i></i></span><span>相簿</span></button>
+        <button class="desktop-icon" data-open-view="player" type="button"><span class="desktop-icon-art player-art" aria-hidden="true">▶</span><span>播放器</span></button>
+      </div>
+
+      <section id="app-window" class="app-window" role="region" aria-labelledby="window-title" aria-label="Nanako 應用程式視窗">
+        <header id="window-titlebar" class="window-titlebar" tabindex="0" aria-label="Nanako 視窗標題列。可拖曳移動，雙擊可最大化；聚焦後可用方向鍵移動，按 Enter 最大化或還原。">
+          <div class="window-app-title"><span id="window-app-icon" class="window-title-icon" aria-hidden="true">▤</span><span id="window-title">檔案管理</span></div>
+          <div class="window-controls" aria-label="視窗控制">
+            <button class="window-control" data-window-action="minimize" type="button" aria-label="最小化視窗" title="最小化">−</button>
+            <button id="window-maximize" class="window-control" data-window-action="maximize" type="button" aria-label="最大化視窗" title="最大化">□</button>
+            <button class="window-control window-close" data-window-action="close" type="button" aria-label="關閉視窗" title="關閉">×</button>
+          </div>
+        </header>
+        <div class="window-app-body">
     <aside class="sidebar">
-      <div class="brand-lockup"><div class="brand-mark small" aria-hidden="true">N</div><div><strong>Nanako</strong><span>本機檔案空間</span></div></div>
-      <div class="sidebar-label">管理</div>
-      <nav aria-label="主要導覽">
+      <div class="sidebar-label">應用程式</div>
+      <nav aria-label="應用程式導覽">
         <button class="nav-item active" data-view="files"><span class="nav-glyph" aria-hidden="true">▤</span>檔案管理</button>
         <button class="nav-item" data-view="album"><span class="nav-glyph" aria-hidden="true">▧</span>相簿</button>
         <button class="nav-item" data-view="player"><span class="nav-glyph" aria-hidden="true">▶</span>播放器</button>
@@ -38,13 +71,13 @@
         <button class="nav-item admin-only" data-view="system"><span class="nav-glyph" aria-hidden="true">▦</span>電腦資訊</button>
         <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
       </nav>
-        <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.2</span></div>
+      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">Nanako 桌面版 0.2</span></div>
     </aside>
 
     <section class="workspace">
       <header class="topbar">
         <div><p class="eyebrow">本機優先儲存空間</p><h1 id="page-title">檔案管理</h1></div>
-        <div class="account-tools"><span id="account-name" class="account-name"></span><button id="logout-button" class="button ghost" type="button">登出</button></div>
+        <div class="account-tools"><button id="logout-button" class="button ghost" type="button">登出</button></div>
       </header>
 
       <section id="view-files" class="view-panel">
@@ -115,6 +148,28 @@
       </section>
       <footer class="footer-note">資料儲存在本機。沒有 SSO、雲端同步或遙測。</footer>
     </section>
+        </div>
+      </section>
+
+      <section id="launcher-menu" class="launcher-menu" aria-label="應用程式選單" hidden>
+        <div class="launcher-heading"><span class="nanako-mark" aria-hidden="true">N</span><div><strong>Nanako 應用程式</strong><small>本機檔案空間</small></div><button id="logout-menu-button" class="button ghost" type="button">登出</button></div>
+        <div class="launcher-grid">
+          <button data-open-view="files" type="button"><span class="launcher-icon folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
+          <button data-open-view="album" type="button"><span class="launcher-icon album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>
+          <button data-open-view="player" type="button"><span class="launcher-icon player-art" aria-hidden="true">▶</span>播放器</button>
+          <button data-open-view="trash" type="button"><span class="launcher-icon trash-art" aria-hidden="true">▤</span>資源回收桶</button>
+          <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>我的電腦</button>
+          <button class="admin-only" data-open-view="system" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⚙</span>電腦資訊</button>
+        </div>
+        <div class="launcher-footer"><span><i class="status-dot" aria-hidden="true"></i>本機服務運作中</span><span>資料僅存於 NanakoData</span></div>
+      </section>
+
+      <footer class="desktop-dock" aria-label="已開啟的應用程式">
+        <button id="dock-app" class="dock-app active running" data-restore-window type="button" aria-label="顯示檔案管理視窗" title="檔案管理"><span class="taskbar-folder" aria-hidden="true"></span><i></i></button>
+        <span class="dock-separator" aria-hidden="true"></span>
+        <button id="dock-launcher" class="dock-launcher" type="button" aria-label="開啟應用程式選單" title="應用程式選單"><span aria-hidden="true">⠿</span></button>
+      </footer>
+    </main>
   </div>
   <dialog id="photo-dialog" class="photo-dialog" aria-labelledby="photo-caption">
     <div class="photo-dialog-toolbar"><button id="photo-prev" class="button secondary" type="button">上一張</button><button id="photo-close" class="button ghost" type="button">關閉</button><button id="photo-next" class="button secondary" type="button">下一張</button></div>

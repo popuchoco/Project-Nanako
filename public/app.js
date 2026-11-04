@@ -3,6 +3,7 @@ const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: 'files',
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
+  windowState: 'open', windowMaximized: false, windowRestoreRect: null, desktopClockTimer: null,
 };
 const mediaExtensions = {
   image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp']),
@@ -86,7 +87,10 @@ function formatDate(value) {
 }
 
 function showAuth(needsSetup) {
+  clearInterval(state.desktopClockTimer);
+  clearTimeout(state.systemRefreshTimer);
   $('#app-shell').hidden = true;
+  closeLauncherMenu();
   $('#auth-screen').hidden = false;
   $('#auth-title').textContent = needsSetup ? '設定本機管理員' : '登入 Nanako';
   $('#auth-description').textContent = needsSetup ? '建立只有這台電腦使用的管理員帳號。資料不會送到外部服務。' : '請使用本機帳號登入。這個帳號不會連結任何雲端服務。';
@@ -113,6 +117,10 @@ function showApp() {
   $('#app-shell').hidden = false;
   $('#account-name').textContent = state.user.username;
   document.querySelectorAll('.admin-only').forEach((item) => { item.hidden = state.user.role !== 'admin'; });
+  setWindowState('open');
+  updateDesktopClock();
+  clearInterval(state.desktopClockTimer);
+  state.desktopClockTimer = setInterval(updateDesktopClock, 15_000);
   loadShares().then(() => showView(state.view));
 }
 
@@ -151,8 +159,16 @@ function showView(view) {
   state.view = view;
   clearTimeout(state.systemRefreshTimer);
   const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', network: '網路狀態' };
+  const icons = { files: '▤', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '⚙', network: '⌁' };
   $('#page-title').textContent = names[view];
+  $('#window-title').textContent = names[view];
+  $('#window-app-icon').textContent = icons[view] || '▤';
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
+  document.querySelectorAll('.taskbar-app[data-open-view]').forEach((button) => button.classList.toggle('active', button.dataset.openView === view));
+  const dockApp = $('#dock-app');
+  dockApp.setAttribute('aria-label', `顯示${names[view]}視窗`);
+  dockApp.title = names[view];
+  dockApp.classList.toggle('active', state.windowState === 'open');
   document.querySelectorAll('.view-panel').forEach((panel) => { panel.hidden = panel.id !== `view-${view}`; });
   if (view === 'files') loadFiles();
   if (view === 'album') loadAlbum();
@@ -162,6 +178,136 @@ function showView(view) {
   if (view === 'computer') loadComputer();
   if (view === 'system') loadSystem();
   if (view === 'network') loadNetwork();
+}
+
+function setWindowState(nextState) {
+  state.windowState = nextState;
+  const windowElement = $('#app-window');
+  const dockApp = $('#dock-app');
+  windowElement.hidden = nextState !== 'open';
+  dockApp.classList.toggle('active', nextState === 'open');
+  dockApp.classList.toggle('running', nextState !== 'closed');
+  dockApp.setAttribute('aria-pressed', String(nextState === 'open'));
+}
+
+function launchView(view) {
+  closeLauncherMenu();
+  showView(view);
+  setWindowState('open');
+}
+
+function updateDesktopClock() {
+  const clock = $('#desktop-clock');
+  if (!clock) return;
+  const now = new Date();
+  clock.textContent = new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+  clock.title = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'full' }).format(now);
+}
+
+function toggleLauncherMenu(force) {
+  const menu = $('#launcher-menu');
+  const button = $('#launcher-toggle');
+  const open = force ?? menu.hidden;
+  menu.hidden = !open;
+  button.setAttribute('aria-expanded', String(open));
+}
+
+function closeLauncherMenu() { toggleLauncherMenu(false); }
+
+function toggleWindowMaximized() {
+  const windowElement = $('#app-window');
+  if (!state.windowMaximized) {
+    state.windowRestoreRect = {
+      left: windowElement.style.left,
+      top: windowElement.style.top,
+      width: windowElement.style.width,
+      height: windowElement.style.height,
+    };
+    state.windowMaximized = true;
+    windowElement.classList.add('is-maximized');
+    $('#window-maximize').textContent = '▢';
+    $('#window-maximize').setAttribute('aria-label', '還原視窗');
+    $('#window-maximize').title = '還原';
+  } else {
+    state.windowMaximized = false;
+    windowElement.classList.remove('is-maximized');
+    const rect = state.windowRestoreRect || {};
+    for (const key of ['left', 'top', 'width', 'height']) windowElement.style[key] = rect[key] || '';
+    $('#window-maximize').textContent = '□';
+    $('#window-maximize').setAttribute('aria-label', '最大化視窗');
+    $('#window-maximize').title = '最大化';
+  }
+}
+
+function initializeDesktopInteractions() {
+  document.querySelectorAll('[data-open-view]').forEach((button) => button.addEventListener('click', () => launchView(button.dataset.openView)));
+  document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+  $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
+  $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
+  $('#desktop-account').addEventListener('click', () => toggleLauncherMenu());
+  $('#logout-menu-button').addEventListener('click', () => $('#logout-button').click());
+  $('#dock-app').addEventListener('click', () => {
+    if (state.windowState === 'open') showView(state.view);
+    else setWindowState('open');
+  });
+  document.querySelectorAll('[data-window-action]').forEach((button) => button.addEventListener('click', () => {
+    const action = button.dataset.windowAction;
+    if (action === 'minimize' || action === 'close') setWindowState(action === 'minimize' ? 'minimized' : 'closed');
+    if (action === 'maximize') toggleWindowMaximized();
+  }));
+
+  const titlebar = $('#window-titlebar');
+  const windowElement = $('#app-window');
+  let drag = null;
+  titlebar.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('button') || state.windowMaximized) return;
+    const rect = windowElement.getBoundingClientRect();
+    const area = $('#desktop-area').getBoundingClientRect();
+    drag = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, area, started: false };
+    titlebar.setPointerCapture(event.pointerId);
+  });
+  titlebar.addEventListener('pointermove', (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.started && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
+    drag.started = true;
+    const area = drag.area;
+    const width = windowElement.offsetWidth;
+    const height = windowElement.offsetHeight;
+    const left = Math.max(0, Math.min(area.width - Math.min(width, 180), event.clientX - area.left - drag.offsetX));
+    const top = Math.max(0, Math.min(area.height - 44, event.clientY - area.top - drag.offsetY));
+    windowElement.style.left = `${left}px`;
+    windowElement.style.top = `${top}px`;
+  });
+  const stopDrag = (event) => {
+    if (drag?.pointerId === event.pointerId) drag = null;
+  };
+  titlebar.addEventListener('pointerup', stopDrag);
+  titlebar.addEventListener('pointercancel', stopDrag);
+  titlebar.addEventListener('dblclick', (event) => { if (!event.target.closest('button')) toggleWindowMaximized(); });
+  titlebar.addEventListener('keydown', (event) => {
+    if (event.target !== titlebar) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleWindowMaximized();
+      return;
+    }
+    const movement = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }[event.key];
+    if (!movement || state.windowMaximized) return;
+    event.preventDefault();
+    const area = $('#desktop-area').getBoundingClientRect();
+    const rect = windowElement.getBoundingClientRect();
+    const nextLeft = Math.max(0, Math.min(area.width - Math.min(rect.width, 180), rect.left - area.left + movement[0]));
+    const nextTop = Math.max(0, Math.min(area.height - 44, rect.top - area.top + movement[1]));
+    windowElement.style.left = `${nextLeft}px`;
+    windowElement.style.top = `${nextTop}px`;
+  });
+
+  $('#desktop-area').addEventListener('pointerdown', (event) => {
+    if (event.target === event.currentTarget) closeLauncherMenu();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('#launcher-menu').hidden) closeLauncherMenu();
+  });
 }
 
 function renderBreadcrumb(container, currentPath, onNavigate) {
@@ -608,7 +754,7 @@ $('#auth-form').addEventListener('submit', async (event) => {
 });
 
 $('#logout-button').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); resetPlayer(); state.user = null; state.path = ''; showAuth(false); });
-document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+initializeDesktopInteractions();
 for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select']) {
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
