@@ -2,13 +2,28 @@ const $ = (selector) => document.querySelector(selector);
 const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: 'files',
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
-  activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '',
+  activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
 };
 const mediaExtensions = {
   image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp']),
   video: new Set(['mp4', 'm4v', 'mov', 'webm', 'ogv']),
   audio: new Set(['mp3', 'm4a', 'aac', 'wav', 'oga', 'ogg', 'opus', 'flac']),
 };
+const mediaProfiles = [
+  { label: 'MP4／H.264＋AAC', kind: 'video', mime: 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"', extension: '.mp4、.m4v' },
+  { label: 'MP4／HEVC＋AAC', kind: 'video', mime: 'video/mp4; codecs="hvc1.1.6.L93.B0,mp4a.40.2"', extension: '.mp4、.m4v' },
+  { label: 'WebM／VP8＋Opus', kind: 'video', mime: 'video/webm; codecs="vp8,opus"', extension: '.webm' },
+  { label: 'WebM／VP9＋Opus', kind: 'video', mime: 'video/webm; codecs="vp9,opus"', extension: '.webm' },
+  { label: 'WebM／AV1＋Opus', kind: 'video', mime: 'video/webm; codecs="av01.0.05M.08,opus"', extension: '.webm' },
+  { label: 'QuickTime／MOV', kind: 'video', mime: 'video/quicktime', extension: '.mov' },
+  { label: 'MP3', kind: 'audio', mime: 'audio/mpeg', extension: '.mp3' },
+  { label: 'AAC／M4A', kind: 'audio', mime: 'audio/mp4; codecs="mp4a.40.2"', extension: '.m4a、.aac' },
+  { label: 'WAV／PCM', kind: 'audio', mime: 'audio/wav; codecs="1"', extension: '.wav' },
+  { label: 'Ogg／Opus', kind: 'audio', mime: 'audio/ogg; codecs="opus"', extension: '.ogg、.oga、.opus' },
+  { label: 'Ogg／Vorbis', kind: 'audio', mime: 'audio/ogg; codecs="vorbis"', extension: '.ogg、.oga' },
+  { label: 'FLAC', kind: 'audio', mime: 'audio/flac', extension: '.flac' },
+  { label: 'WebM／Opus', kind: 'audio', mime: 'audio/webm; codecs="opus"', extension: '.webm' },
+];
 
 function mediaKind(name) {
   const extension = name.split('.').at(-1)?.toLowerCase() || '';
@@ -132,17 +147,20 @@ function renderPermissionOptions() {
 }
 
 function showView(view) {
-  if (view === 'users' && state.user.role !== 'admin') view = 'files';
+  if (['users', 'system'].includes(view) && state.user.role !== 'admin') view = 'files';
   state.view = view;
-  const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', network: '網路狀態' };
+  clearTimeout(state.systemRefreshTimer);
+  const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', network: '網路狀態' };
   $('#page-title').textContent = names[view];
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   document.querySelectorAll('.view-panel').forEach((panel) => { panel.hidden = panel.id !== `view-${view}`; });
   if (view === 'files') loadFiles();
   if (view === 'album') loadAlbum();
-  if (view === 'player') loadPlayer();
+  if (view === 'player') { loadPlayer(); if (!state.mediaCompatibilityLoaded) loadMediaCompatibility(); }
   if (view === 'trash') loadTrash();
   if (view === 'users') loadUsers();
+  if (view === 'computer') loadComputer();
+  if (view === 'system') loadSystem();
   if (view === 'network') loadNetwork();
 }
 
@@ -291,12 +309,13 @@ async function loadAlbum() {
 
 async function loadPlayer() {
   const queue = $('#player-queue');
-  if (!state.shareId) { queue.replaceChildren(); $('#empty-player').hidden = false; resetPlayer(); return; }
+  if (!state.shareId) { state.playerItems = []; refreshMediaTestTracks(); queue.replaceChildren(); $('#empty-player').hidden = false; resetPlayer(); return; }
   try {
     const query = new URLSearchParams({ shareId: state.shareId, path: state.playerPath });
     const { items } = await api(`/api/files?${query}`);
     const folders = items.filter((item) => item.isDirectory);
     state.playerItems = items.filter((item) => !item.isDirectory && ['audio', 'video'].includes(mediaKind(item.name)));
+    refreshMediaTestTracks();
     renderBreadcrumb($('#player-breadcrumb'), state.playerPath, (next) => { state.playerPath = next; loadPlayer(); });
     queue.replaceChildren();
     for (const folder of folders) {
@@ -374,6 +393,214 @@ async function loadNetwork() {
   catch (error) { notify(error.message, true); }
 }
 
+function addSupportPill(text, tone = '') {
+  const pill = document.createElement('span');
+  pill.className = `support-pill ${tone ? `support-${tone}` : ''}`.trim();
+  pill.textContent = text;
+  return pill;
+}
+
+async function loadMediaCompatibility() {
+  const table = $('#media-capability-list');
+  table.replaceChildren();
+  const electronVersion = /Electron\/([\d.]+)/u.exec(navigator.userAgent)?.[1] || '非 Electron';
+  const chromiumVersion = /Chrome\/([\d.]+)/u.exec(navigator.userAgent)?.[1] || '未知';
+  $('#media-runtime').textContent = `Electron ${electronVersion} · Chromium ${chromiumVersion} · 這些提示不是實際播放保證。`;
+  for (const profile of mediaProfiles) {
+    const element = document.createElement(profile.kind);
+    const canPlay = element.canPlayType(profile.mime);
+    let capability = null;
+    if (navigator.mediaCapabilities?.decodingInfo) {
+      try {
+        const configuration = profile.kind === 'video'
+          ? { type: 'file', video: { contentType: profile.mime, width: 320, height: 180, bitrate: 450000, framerate: 24 } }
+          : { type: 'file', audio: { contentType: profile.mime, channels: '2', bitrate: 128000, samplerate: 44100 } };
+        capability = await navigator.mediaCapabilities.decodingInfo(configuration);
+      } catch { capability = null; }
+    }
+    const row = document.createElement('tr');
+    const label = document.createElement('td'); label.textContent = profile.label;
+    const extension = document.createElement('td'); extension.textContent = profile.extension;
+    const declared = document.createElement('td');
+    declared.append(addSupportPill(canPlay || '未宣告支援', canPlay === 'probably' ? 'yes' : canPlay === 'maybe' ? 'maybe' : 'no'));
+    const playback = document.createElement('td');
+    const status = capability?.supported === true ? '能力 API 回報支援' : capability?.supported === false ? '能力 API 未回報支援' : '需用實際檔案確認';
+    playback.append(addSupportPill(status, capability?.supported === true ? 'yes' : capability?.supported === false ? 'no' : 'maybe'));
+    if (capability?.supported) {
+      const detail = document.createElement('small');
+      detail.className = 'capability-detail';
+      detail.textContent = capability.powerEfficient ? '較省電' : capability.smooth ? '流暢度預估良好' : '可能較耗資源';
+      playback.append(document.createElement('br'), detail);
+    }
+    row.append(label, extension, declared, playback);
+    table.append(row);
+  }
+  state.mediaCompatibilityLoaded = true;
+}
+
+function waitForMediaEvent(element, eventName, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error('讀取媒體逾時。')), timeoutMs);
+    const finish = (error) => {
+      clearTimeout(timer);
+      element.removeEventListener(eventName, success);
+      element.removeEventListener('error', failure);
+      error ? reject(error) : resolve();
+    };
+    const success = () => finish();
+    const failure = () => finish(new Error(element.error?.message || '媒體解碼失敗。'));
+    element.addEventListener(eventName, success, { once: true });
+    element.addEventListener('error', failure, { once: true });
+  });
+}
+
+function refreshMediaTestTracks() {
+  const select = $('#media-test-track');
+  const previous = select.value;
+  select.replaceChildren(...state.playerItems.map((item) => {
+    const relativePath = state.playerPath ? `${state.playerPath}/${item.name}` : item.name;
+    const option = document.createElement('option');
+    option.value = relativePath;
+    option.textContent = `${item.name}（${mediaKind(item.name) === 'video' ? '影片' : '音訊'}）`;
+    return option;
+  }));
+  if (state.playerItems.some((item) => (state.playerPath ? `${state.playerPath}/${item.name}` : item.name) === previous)) select.value = previous;
+  select.disabled = state.playerItems.length === 0;
+  $('#media-test-run').disabled = !select.value;
+}
+
+async function testSelectedMedia() {
+  const relativePath = $('#media-test-track').value;
+  const result = $('#media-test-result');
+  const button = $('#media-test-run');
+  if (!relativePath || !state.shareId) return;
+  const fileName = relativePath.split('/').at(-1);
+  const kind = mediaKind(fileName);
+  if (!['audio', 'video'].includes(kind)) {
+    result.textContent = '無法從檔案類型判斷這是音訊或影片；請在目前資料夾選擇支援的影音檔。';
+    result.className = 'inline-message media-test-result-error';
+    return;
+  }
+  const player = kind === 'video' ? $('#media-test-video') : $('#media-test-audio');
+  const inactive = kind === 'video' ? $('#media-test-audio') : $('#media-test-video');
+  inactive.pause(); inactive.removeAttribute('src'); inactive.load();
+  player.pause(); player.muted = true;
+  const loaded = waitForMediaEvent(player, 'loadeddata');
+  const playing = waitForMediaEvent(player, 'playing');
+  result.textContent = `正在測試 Nanako 資料空間中的「${fileName}」…`;
+  result.className = 'inline-message';
+  button.disabled = true;
+  try {
+    player.src = mediaUrl(state.shareId, relativePath);
+    player.load();
+    const started = player.play();
+    await Promise.all([loaded, playing, started]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (player.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) throw new Error('沒有解出可播放的影音資料。');
+    if (kind === 'video' && (!player.videoWidth || !player.videoHeight)) throw new Error('沒有解出影片影格。');
+    const detail = kind === 'video' ? `${player.videoWidth} × ${player.videoHeight}` : `${Number(player.duration || 0).toFixed(1)} 秒`;
+    result.textContent = `播放測試成功：${fileName}（${detail}）。只驗證開頭片段，未檢查整份檔案。`;
+    result.className = 'inline-message media-test-result-success';
+  } catch (error) {
+    result.textContent = `播放測試失敗：${fileName}（${error.message}）。這可能是容器、編碼、檔案損毀或執行環境不支援；原始檔未變更。`;
+    result.className = 'inline-message media-test-result-error';
+  } finally {
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    button.disabled = !$('#media-test-track').value;
+  }
+}
+
+async function loadComputer() {
+  const list = $('#managed-storage-list');
+  list.replaceChildren();
+  for (const share of state.shares) {
+    const tile = document.createElement('article'); tile.className = 'library-tile';
+    const title = document.createElement('strong'); title.textContent = share.name;
+    const detail = document.createElement('small'); detail.textContent = share.canWrite ? 'Nanako 可攜式資料目錄 · 可讀取與寫入' : 'Nanako 可攜式資料目錄 · 唯讀';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'button secondary'; button.textContent = '開啟資料空間';
+    button.addEventListener('click', () => { selectShare(share.id); showView('files'); });
+    tile.append(title, detail, button); list.append(tile);
+  }
+  $('#managed-storage-empty').hidden = state.shares.length > 0;
+}
+function makeSystemCard(title, wide = false) {
+  const card = document.createElement('section');
+  card.className = `system-card${wide ? ' system-card-wide' : ''}`;
+  const heading = document.createElement('h3'); heading.textContent = title;
+  card.append(heading);
+  return card;
+}
+
+function addSystemFact(list, label, value) {
+  const term = document.createElement('dt'); term.textContent = label;
+  const detail = document.createElement('dd'); detail.textContent = value || '—';
+  list.append(term, detail);
+}
+
+function makeSystemMeter(label, percent, text) {
+  const row = document.createElement('div'); row.className = 'system-fact-row';
+  const name = document.createElement('span'); name.textContent = label;
+  const meter = document.createElement('div'); meter.className = 'system-meter';
+  const track = document.createElement('div'); track.className = 'system-meter-track';
+  const fill = document.createElement('div'); fill.className = 'system-meter-fill'; fill.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+  track.append(fill);
+  const number = document.createElement('strong'); number.textContent = text;
+  meter.append(track, number); row.append(name, meter);
+  return row;
+}
+
+async function loadSystem() {
+  try {
+    const info = await api('/api/system');
+    const container = $('#system-information'); container.replaceChildren();
+    const device = makeSystemCard('裝置資訊');
+    const deviceFacts = document.createElement('dl'); deviceFacts.className = 'system-facts';
+    addSystemFact(deviceFacts, '電腦名稱', info.computerName);
+    addSystemFact(deviceFacts, '作業系統', `${info.operatingSystem} ${info.operatingSystemVersion || ''}`.trim());
+    addSystemFact(deviceFacts, '版本組建', info.buildNumber ? `Build ${info.buildNumber}` : '—');
+    addSystemFact(deviceFacts, '系統架構', `${info.architecture}（${info.logicalProcessors} 個邏輯處理器）`);
+    addSystemFact(deviceFacts, '處理器', info.processor);
+    device.append(deviceFacts);
+
+    const memory = makeSystemCard('記憶體');
+    const memoryFacts = document.createElement('dl'); memoryFacts.className = 'system-facts';
+    addSystemFact(memoryFacts, '已使用', `${formatSize(info.memory.usedBytes)}／${formatSize(info.memory.totalBytes)}`);
+    addSystemFact(memoryFacts, '可用', formatSize(info.memory.availableBytes));
+    memory.append(memoryFacts, makeSystemMeter('使用率', info.memory.usagePercent, `${info.memory.usagePercent}%`));
+
+    const cpu = makeSystemCard('處理器狀態');
+    const cpuValue = info.cpuUsagePercent === null ? '收集基準中' : `${info.cpuUsagePercent}%`;
+    cpu.append(makeSystemMeter('整體使用率', info.cpuUsagePercent, cpuValue));
+
+    const storage = makeSystemCard('Nanako 資料所在磁碟');
+    const storageFacts = document.createElement('dl'); storageFacts.className = 'system-facts';
+    addSystemFact(storageFacts, '已使用', `${formatSize(info.storage.usedBytes)}／${formatSize(info.storage.totalBytes)}`);
+    addSystemFact(storageFacts, '可用', formatSize(info.storage.freeBytes));
+    storage.append(storageFacts, makeSystemMeter('空間使用率', info.storage.totalBytes ? info.storage.usedBytes / info.storage.totalBytes * 100 : 0, info.storage.totalBytes ? `${Math.round(info.storage.usedBytes / info.storage.totalBytes * 100)}%` : '未知'));
+
+    const network = makeSystemCard('網路介面', true);
+    const interfaces = document.createElement('div'); interfaces.className = 'system-interface-list';
+    for (const item of info.networkInterfaces) {
+      const row = document.createElement('div'); row.className = 'system-interface';
+      const name = document.createElement('strong'); name.textContent = item.name;
+      const address = document.createElement('span'); address.textContent = `${item.address}（${item.family}${item.private ? '・私人網段' : ''}）`;
+      const macLabel = document.createElement('span'); macLabel.textContent = 'MAC 位址';
+      const mac = document.createElement('span'); mac.textContent = item.mac || '—';
+      row.append(name, address, macLabel, mac); interfaces.append(row);
+    }
+    if (!info.networkInterfaces.length) interfaces.textContent = '目前沒有啟用中的網路介面。';
+    network.append(interfaces);
+    container.append(device, memory, cpu, storage, network);
+    if (state.view === 'system') state.systemRefreshTimer = setTimeout(loadSystem, 5000);
+  } catch (error) {
+    const container = $('#system-information'); container.replaceChildren();
+    const message = document.createElement('p'); message.className = 'system-error'; message.textContent = error.message;
+    container.append(message);
+  }
+}
+
 $('#auth-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const form = new FormData(event.currentTarget); const mode = event.currentTarget.dataset.mode; const errorBox = $('#auth-error'); errorBox.hidden = true;
   try { const result = await api(mode === 'setup' ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) }); state.user = result.user; event.currentTarget.reset(); showApp(); }
@@ -395,5 +622,14 @@ $('#photo-next').addEventListener('click', () => showPhoto(state.photoIndex + 1)
 $('#photo-dialog').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
 $('#video-player').addEventListener('ended', playNextTrack);
 $('#audio-player').addEventListener('ended', playNextTrack);
+$('#media-test-track').addEventListener('change', () => {
+  const option = $('#media-test-track').selectedOptions[0];
+  $('#media-test-run').disabled = !option;
+  $('#media-test-result').textContent = option ? `已選取 Nanako 資料空間內的「${option.textContent}」。播放測試透過本機 API 串流讀取，不會存取其他資料夾。` : '請先在播放器上方選取資料空間與資料夾。';
+  $('#media-test-result').className = 'inline-message';
+});
+$('#media-test-run').addEventListener('click', testSelectedMedia);
+$('#refresh-system').addEventListener('click', loadSystem);
 
 start();
+

@@ -3,11 +3,47 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "main": "electron/main.mjs",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "start": "node src/run.mjs",
     "desktop": "electron electron/main.mjs",
+    "test:media": "electron electron/main.mjs --media-compatibility-test",
+    "package:win": "electron-builder --win portable --x64",
     "test": "node --test"
   },
-  "devDependencies": { "electron": "45.2.2" }
+  "devDependencies": {
+    "electron": "45.2.2",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "tw.project-nanako.desktop",
+    "productName": "Project Nanako",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Nanako-${version}-${arch}-portable.${ext}"
+    }
+  }
 }

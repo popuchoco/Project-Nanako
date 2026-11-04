@@ -34,9 +34,11 @@
         <button class="nav-item" data-view="player"><span class="nav-glyph" aria-hidden="true">▶</span>播放器</button>
         <button class="nav-item" data-view="trash"><span class="nav-glyph" aria-hidden="true">⌫</span>資源回收桶</button>
         <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
+        <button class="nav-item" data-view="computer"><span class="nav-glyph" aria-hidden="true">▣</span>我的電腦</button>
+        <button class="nav-item admin-only" data-view="system"><span class="nav-glyph" aria-hidden="true">▦</span>電腦資訊</button>
         <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
       </nav>
-      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.2</span></div>
+        <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.2</span></div>
     </aside>
 
     <section class="workspace">
@@ -46,8 +48,8 @@
       </header>
 
       <section id="view-files" class="view-panel">
-        <div class="content-heading"><div><h2>檔案</h2><p class="muted">管理本機分享資料夾內的檔案。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">上傳檔案<input id="file-input" type="file" multiple hidden></label></div></div>
-        <div class="file-controls"><label class="field-inline">分享資料夾<select id="share-select" aria-label="選擇分享資料夾"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
+        <div class="content-heading"><div><h2>檔案</h2><p class="muted">檔案只能存放與管理於 Nanako 可攜式資料目錄；其他磁碟與 Windows 個人資料夾不會列入。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">匯入檔案<input id="file-input" type="file" multiple hidden></label></div></div>
+        <div class="file-controls"><label class="field-inline">資料空間<select id="share-select" aria-label="選擇資料空間"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
         <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
         <p id="file-message" class="inline-message" role="status" hidden></p>
       </section>
@@ -61,7 +63,7 @@
 
       <section id="view-player" class="view-panel" hidden>
         <div class="content-heading"><div><h2>播放器</h2><p class="muted">播放目前資料夾中瀏覽器支援的音訊與影片格式。</p></div></div>
-        <div class="file-controls"><label class="field-inline">分享資料夾<select id="player-share-select" aria-label="選擇播放器分享資料夾"></select></label><div id="player-breadcrumb" class="breadcrumb" aria-label="播放器目前路徑"></div></div>
+        <div class="file-controls"><label class="field-inline">資料空間<select id="player-share-select" aria-label="選擇播放器資料空間"></select></label><div id="player-breadcrumb" class="breadcrumb" aria-label="播放器目前路徑"></div></div>
         <div class="media-player-layout">
           <section class="card player-stage" aria-label="媒體播放區">
             <p id="current-media-name" class="current-media-name">尚未選取媒體</p>
@@ -72,6 +74,18 @@
           </section>
           <section class="card queue-card"><h3>播放清單</h3><div id="player-queue" class="player-queue"></div><div id="empty-player" class="empty-state" hidden><strong>沒有可播放的媒體</strong><span>支援 MP4、WebM、MP3、M4A、WAV、OGG、Opus 與 FLAC 等格式；實際播放能力依瀏覽器與編碼格式而異。</span></div></section>
         </div>
+        <section class="card compatibility-card" aria-labelledby="compatibility-title">
+          <div class="content-heading"><div><h3 id="compatibility-title">影音格式相容性</h3><p class="muted">格式提示僅供參考。選取實際影音檔並執行播放測試，才能確認這台電腦的 Electron 執行環境是否能解碼。</p></div></div>
+          <p id="media-runtime" class="runtime-note" role="status">讀取 Electron 執行環境中…</p>
+          <div class="table-wrap compatibility-table-wrap"><table><thead><tr><th scope="col">格式／編碼</th><th scope="col">副檔名</th><th scope="col">執行環境宣告</th><th scope="col">播放能力提示</th></tr></thead><tbody id="media-capability-list"></tbody></table></div>
+          <div class="media-test-controls">
+            <label class="field-inline">選擇 Nanako 資料空間內的影音檔<select id="media-test-track" aria-label="選擇 Nanako 資料空間內的影音檔" disabled></select></label>
+            <button id="media-test-run" class="button primary" type="button" disabled>測試實際播放</button>
+          </div>
+          <p id="media-test-result" class="inline-message" role="status" aria-live="polite">播放清單與測試檔案只會讀取目前 Nanako 資料空間，不會瀏覽或讀取其他磁碟與資料夾。</p>
+          <video id="media-test-video" class="media-test-probe" muted playsinline aria-hidden="true"></video>
+          <audio id="media-test-audio" class="media-test-probe" aria-hidden="true"></audio>
+        </section>
       </section>
 
       <section id="view-trash" class="view-panel" hidden>
@@ -83,6 +97,16 @@
       <section id="view-users" class="view-panel" hidden>
         <div class="content-heading"><div><h2>使用者與權限</h2><p class="muted">每個使用者都使用本機帳號；權限預設採拒絕。</p></div></div>
         <div class="management-grid"><form id="user-form" class="card form-stack"><h3>新增使用者</h3><label>帳號<input name="username" autocomplete="off" minlength="3" maxlength="32" required></label><label>初始密碼<input name="password" type="password" minlength="12" maxlength="256" required></label><fieldset><legend>分享資料夾權限</legend><div id="permission-options" class="permission-options"></div></fieldset><button class="button primary" type="submit">建立使用者</button><p id="user-message" class="inline-message" role="status" hidden></p></form><section class="card"><h3>本機使用者</h3><div id="user-list" class="user-list"></div></section></div>
+      </section>
+
+      <section id="view-computer" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>我的電腦</h2><p class="muted">Nanako 只管理可攜式執行檔所在目錄內的 NanakoData；不會瀏覽其他磁碟、Windows 已知資料夾或任意路徑。</p></div></div>
+        <section class="card computer-card"><h3>Nanako 可攜式資料空間</h3><p class="muted">檔案、相簿、影音播放器與資源回收桶都使用同一個受限資料範圍。匯入檔案會複製到這裡；檔案管理操作不會改動匯入來源。</p><div id="managed-storage-list" class="library-grid"></div><p id="managed-storage-empty" class="empty-state" hidden>目前沒有可存取的資料空間。</p></section>
+      </section>
+
+      <section id="view-system" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>電腦資訊</h2><p class="muted">查看本機作業系統、處理器、記憶體、資料磁碟與網路介面概況。</p></div><button id="refresh-system" class="button secondary" type="button">重新整理</button></div>
+        <div id="system-information" class="system-grid" aria-live="polite"><div class="card">讀取電腦資訊中…</div></div>
       </section>
 
       <section id="view-network" class="view-panel" hidden>

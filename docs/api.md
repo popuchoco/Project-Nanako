@@ -32,10 +32,13 @@
 | `GET /api/users` | 是 | 僅管理員可列出使用者。 |
 | `POST /api/users` | 是 | 僅管理員；JSON `{ "username", "password", "permissions": [{ "shareId", "canRead", "canWrite" }] }`。 |
 | `GET /api/network` | 是 | 回報目前本機服務資訊與網路介面清單；不會啟用區域網路連線或改變網路設定。 |
+| `GET /api/system` | 是 | 僅管理員；查看本機電腦名稱、Windows 版本／組建、處理器、記憶體、Nanako 資料磁碟容量及網路介面資訊。 |
 
 `path` 是分享資料夾內的相對路徑；不可使用絕對路徑或跳脫路徑。名稱須符合 Windows 檔名限制。實際狀態碼與回應內容以 `src/server.mjs` 和 `test/server.test.mjs` 為準。
 
-`/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。
+檔案 API 的根目錄固定為可攜式執行檔所在位置的 `NanakoData/data/files/<shareId>`；API 不接受外部路徑、磁碟代號或資料夾選擇請求。`/api/download` 只傳回該根目錄內的檔案；`DELETE /api/files` 與資源回收桶只操作 `NanakoData/data/trash`。相簿和播放器也只能讀取這些 Nanako 資料空間。Renderer 送入的 `path` 一律是分享資料空間內的相對路徑；伺服器會拒絕資料目錄中的符號連結／重新解析點。
+
+`/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。播放器的相容性測試只能選取目前 Nanako 分享資料空間的檔案，並透過同一個受權限檢查的 Range API 串流播放；不會開啟檔案系統選擇器或讀取外部媒體路徑。
 
 ## 外部整合 API 的後續設計
 

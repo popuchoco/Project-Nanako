@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, lstat, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, lstat, readdir, rename, rm, stat, statfs } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -9,8 +9,10 @@ import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
 
 const scrypt = promisify(crypto.scrypt);
+const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicRoot = path.join(projectRoot, 'public');
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -93,22 +95,32 @@ function resolveInside(root, relative = '') {
   return { target, parts };
 }
 
-async function rejectSymlinkTraversal(root, target, includeLeaf = true) {
-  const rootInfo = await lstat(path.resolve(root)).catch((error) => {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  });
-  if (rootInfo?.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', '目前不支援符號連結。');
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw fail(400, 'invalid_path', '路徑超出分享範圍。');
-  const parts = relative ? relative.split(path.sep) : [];
-  let current = path.resolve(root);
+function resolveShareInside(root, relative = '') {
+  const resolved = resolveInside(root, relative);
+  if (resolved.parts[0]?.toLocaleLowerCase('en-US') === '.nanako-trash') {
+    throw fail(404, 'not_found', '找不到這個項目。');
+  }
+  return resolved;
+}
+
+async function rejectSymlinkTraversal(managedRoot, root, target, includeLeaf = true) {
+  managedRoot = path.resolve(managedRoot);
+  const absoluteRoot = path.resolve(root);
+  const absoluteTarget = path.resolve(target);
+  const rootRelative = path.relative(managedRoot, absoluteRoot);
+  const relative = path.relative(absoluteRoot, absoluteTarget);
+  if ([rootRelative, relative].some((value) => value === '..' || value.startsWith(`..${path.sep}`) || path.isAbsolute(value))) {
+    throw fail(400, 'invalid_path', '路徑超出 Nanako 資料範圍。');
+  }
+  const managedRelative = path.relative(managedRoot, absoluteTarget);
+  const parts = managedRelative ? managedRelative.split(path.sep) : [];
+  let current = managedRoot;
   const count = includeLeaf ? parts.length : Math.max(0, parts.length - 1);
   for (const part of parts.slice(0, count)) {
     current = path.join(current, part);
     try {
       const info = await lstat(current);
-      if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', '目前不支援符號連結。');
+      if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
     } catch (error) {
       if (error.code === 'ENOENT') break;
       throw error;
@@ -163,7 +175,8 @@ function initDatabase(dataDir) {
       role TEXT NOT NULL CHECK(role IN ('admin','user')), created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS shares (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+      storage_path TEXT, source_type TEXT NOT NULL DEFAULT 'managed'
     );
     CREATE TABLE IF NOT EXISTS share_permissions (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -181,31 +194,139 @@ function initDatabase(dataDir) {
       is_directory INTEGER NOT NULL, deleted_by TEXT NOT NULL, deleted_at TEXT NOT NULL
     );
   `);
+  const shareColumns = new Set(db.prepare('PRAGMA table_info(shares)').all().map((column) => column.name));
+  if (!shareColumns.has('storage_path')) db.exec('ALTER TABLE shares ADD COLUMN storage_path TEXT');
+  if (!shareColumns.has('source_type')) db.exec("ALTER TABLE shares ADD COLUMN source_type TEXT NOT NULL DEFAULT 'managed'");
+  db.exec(`
+    UPDATE shares SET storage_path = NULL, source_type = 'out-of-scope'
+      WHERE storage_path IS NOT NULL OR source_type <> 'managed';
+    UPDATE trash_items SET stored_path = ''
+      WHERE share_id IN (SELECT id FROM shares WHERE source_type = 'out-of-scope');
+  `);
   return db;
 }
 
-export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } = {}) {
-  if (!dataDir) dataDir = path.join(process.env.LOCALAPPDATA || os.homedir(), 'LocalNAS', 'data');
+function isPrivateIpv4(address) {
+  const parts = address.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10
+    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+    || (parts[0] === 192 && parts[1] === 168);
+}
+
+function listNetworkInterfaces() {
+  return Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) => (addresses || [])
+    .filter((item) => !item.internal)
+    .map((item) => ({
+      name,
+      address: item.address,
+      family: item.family,
+      netmask: item.netmask,
+      mac: item.mac,
+      cidr: item.cidr,
+      private: item.family === 'IPv4' && isPrivateIpv4(item.address),
+    })))
+    .sort((a, b) => Number(b.family === 'IPv4') - Number(a.family === 'IPv4') || a.name.localeCompare(b.name, 'zh-TW'));
+}
+
+let lastCpuSample;
+function sampleCpuUsage(cpus = os.cpus()) {
+  const totals = cpus.reduce((summary, cpu) => {
+    const values = Object.values(cpu.times);
+    summary.total += values.reduce((sum, value) => sum + value, 0);
+    summary.idle += cpu.times.idle;
+    return summary;
+  }, { total: 0, idle: 0 });
+  const previous = lastCpuSample;
+  lastCpuSample = totals;
+  if (!previous || totals.total <= previous.total) return null;
+  return Math.max(0, Math.min(100, Math.round((1 - (totals.idle - previous.idle) / (totals.total - previous.total)) * 100)));
+}
+
+async function collectSystemInformation(dataDir) {
+  const cpus = os.cpus();
+  const memoryTotal = os.totalmem();
+  const memoryFree = os.freemem();
+  const fsInfo = await statfs(dataDir).catch(() => null);
+  const blockSize = fsInfo ? Number(fsInfo.bsize) : 0;
+  const storageTotal = fsInfo ? Number(fsInfo.blocks) * blockSize : 0;
+  const storageFree = fsInfo ? Number(fsInfo.bavail) * blockSize : 0;
+  const release = os.release();
+  let windowsVersion = null;
+  if (process.platform === 'win32') {
+    try {
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        "Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture | ConvertTo-Json -Compress",
+      ], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
+      const info = JSON.parse(stdout.trim());
+      windowsVersion = { name: info.Caption, version: info.Version, buildNumber: String(info.BuildNumber), architecture: info.OSArchitecture };
+    } catch { /* keep Node.js platform details as a fallback */ }
+  }
+  return {
+    computerName: os.hostname(),
+    operatingSystem: windowsVersion?.name || os.version(),
+    operatingSystemVersion: windowsVersion?.version || release,
+    osRelease: release,
+    buildNumber: windowsVersion?.buildNumber || release.split('.').at(-1) || '',
+    architecture: windowsVersion?.architecture || os.arch(),
+    platform: process.platform,
+    processor: cpus[0]?.model?.trim() || '未知處理器',
+    logicalProcessors: cpus.length,
+    cpuUsagePercent: sampleCpuUsage(cpus),
+    memory: { totalBytes: memoryTotal, availableBytes: memoryFree, usedBytes: memoryTotal - memoryFree, usagePercent: Math.round((1 - memoryFree / memoryTotal) * 100) },
+    storage: { totalBytes: storageTotal, freeBytes: storageFree, usedBytes: Math.max(0, storageTotal - storageFree) },
+    networkInterfaces: listNetworkInterfaces(),
+  };
+}
+
+export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765 } = {}) {
+  if (!dataDir) dataDir = path.join(projectRoot, 'NanakoData', 'data');
   if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
     throw new Error('此原型僅允許本機連線；區域網路連線尚未開放。');
   }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('連接埠必須介於 0 至 65535。');
-  await mkdir(dataDir, { recursive: true });
-  await mkdir(path.join(dataDir, 'files'), { recursive: true });
-  await mkdir(path.join(dataDir, 'trash'), { recursive: true });
+  dataDir = path.resolve(dataDir);
+  if (storageRoot) {
+    storageRoot = path.resolve(storageRoot);
+    if (dataDir !== path.join(storageRoot, 'data')) throw new Error('Nanako 資料目錄必須位於指定的可攜式資料根目錄內。');
+  }
+  async function ensureManagedDirectory(directory) {
+    await mkdir(directory).catch((error) => { if (error.code !== 'EEXIST') throw error; });
+    const info = await lstat(directory);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('Nanako 資料目錄及其管理目錄不可使用符號連結、重新解析點或非資料夾項目。');
+    }
+  }
+  if (storageRoot) await ensureManagedDirectory(storageRoot);
+  await ensureManagedDirectory(dataDir);
+  await ensureManagedDirectory(path.join(dataDir, 'files'));
+  await ensureManagedDirectory(path.join(dataDir, 'trash'));
+  for (const filename of ['metadata.sqlite', 'metadata.sqlite-wal', 'metadata.sqlite-shm']) {
+    const info = await lstat(path.join(dataDir, filename)).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
+  }
   const db = initDatabase(dataDir);
 
   const findUser = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE');
   const getUserById = db.prepare('SELECT id, username, role, created_at FROM users WHERE id = ?');
   const findShare = db.prepare('SELECT * FROM shares WHERE id = ?');
   const getPerm = db.prepare(`SELECT can_read, can_write FROM share_permissions WHERE user_id = ? AND share_id = ?`);
-  const allShares = db.prepare('SELECT id, name, created_at FROM shares ORDER BY name COLLATE NOCASE');
+  const allShares = db.prepare("SELECT id, name, created_at, storage_path, source_type FROM shares WHERE source_type = 'managed' AND storage_path IS NULL ORDER BY name COLLATE NOCASE");
 
   function shareRoot(shareId) {
     if (!/^[0-9a-f-]{36}$/iu.test(shareId || '')) throw fail(400, 'invalid_share', '分享資料夾不正確。');
     const share = findShare.get(shareId);
-    if (!share) throw fail(404, 'share_not_found', '找不到分享資料夾。');
+    if (!share || share.source_type !== 'managed' || share.storage_path) throw fail(404, 'share_not_found', '找不到這個 Nanako 資料空間。');
     return { share, root: path.join(dataDir, 'files', share.id) };
+  }
+
+  function managedTrashPath(shareId, itemId) {
+    if (!/^[0-9a-f-]{36}$/iu.test(itemId || '')) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
+    return path.join(dataDir, 'trash', shareId, itemId);
   }
 
   function permission(user, shareId) {
@@ -230,7 +351,7 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     try {
       const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
       const method = req.method || 'GET';
@@ -256,7 +377,10 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
             .run(userId, username, pass.salt, pass.hash, 'admin', now);
           db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', now);
           db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
-          await mkdir(path.join(dataDir, 'files', shareId), { recursive: true });
+          const newShareRoot = path.join(dataDir, 'files', shareId);
+          await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot, false);
+          await mkdir(newShareRoot);
+          await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot);
           const token = crypto.randomBytes(32).toString('base64url');
           db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_SECONDS * 1000);
           return json(res, 201, { user: getUserById.get(userId) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
@@ -281,21 +405,31 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
 
         if (route === '/api/me' && method === 'GET') return json(res, 200, { user });
         if (route === '/api/shares' && method === 'GET') {
-          const shares = allShares.all().filter((share) => permission(user, share.id).can_read).map((share) => ({ ...share, canWrite: Boolean(permission(user, share.id).can_write) }));
+          const shares = allShares.all().filter((share) => permission(user, share.id).can_read).map((share) => ({
+            id: share.id,
+            name: share.name,
+            created_at: share.created_at,
+            sourceType: 'managed',
+            canWrite: Boolean(permission(user, share.id).can_write),
+          }));
           return json(res, 200, { shares });
+        }
+        if (route === '/api/system' && method === 'GET') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看電腦資訊。');
+          return json(res, 200, await collectSystemInformation(dataDir));
         }
         if (route === '/api/files' && method === 'GET') {
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId);
           const { root } = shareRoot(shareId);
-          const { target } = resolveInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(root, target);
+          const { target } = resolveShareInside(root, url.searchParams.get('path') || '');
+          await rejectSymlinkTraversal(dataDir, root, target);
           const info = await stat(target).catch(() => null);
           if (!info?.isDirectory()) throw fail(404, 'folder_not_found', '找不到資料夾。');
           const entries = await readdir(target, { withFileTypes: true });
           const items = [];
           for (const entry of entries) {
-            if (entry.name.startsWith('.localnas-')) continue;
+            if (entry.name.startsWith('.localnas-') || entry.name.toLocaleLowerCase('en-US') === '.nanako-trash') continue;
             const itemPath = path.join(target, entry.name);
             const itemInfo = await lstat(itemPath);
             if (itemInfo.isSymbolicLink()) continue;
@@ -309,8 +443,8 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const shareId = String(body.shareId || '');
           requirePermission(user, shareId, true);
           const { root } = shareRoot(shareId);
-          const parent = resolveInside(root, body.path || '');
-          await rejectSymlinkTraversal(root, parent.target);
+          const parent = resolveShareInside(root, body.path || '');
+          await rejectSymlinkTraversal(dataDir, root, parent.target);
           if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
           const name = safeName(body.name);
           const target = path.join(parent.target, name);
@@ -321,9 +455,9 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId, true);
           const { root } = shareRoot(shareId);
-          const parent = resolveInside(root, url.searchParams.get('path') || '');
+          const parent = resolveShareInside(root, url.searchParams.get('path') || '');
           const name = safeName(url.searchParams.get('name') || '');
-          await rejectSymlinkTraversal(root, parent.target);
+          await rejectSymlinkTraversal(dataDir, root, parent.target);
           if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
           const target = path.join(parent.target, name);
           if (await stat(target).catch(() => null)) throw fail(409, 'already_exists', '同名項目已存在。');
@@ -345,8 +479,8 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId);
           const { root } = shareRoot(shareId);
-          const { target, parts } = resolveInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(root, target);
+          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
+          await rejectSymlinkTraversal(dataDir, root, target);
           const info = await stat(target).catch(() => null);
           if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
           const contentType = mediaTypes.get(path.extname(target).toLowerCase());
@@ -401,8 +535,8 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId);
           const { root } = shareRoot(shareId);
-          const { target, parts } = resolveInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(root, target);
+          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
+          await rejectSymlinkTraversal(dataDir, root, target);
           const info = await stat(target).catch(() => null);
           if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
           const name = parts.at(-1) || 'download';
@@ -413,14 +547,16 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId, true);
           const { share, root } = shareRoot(shareId);
-          const { target, parts } = resolveInside(root, url.searchParams.get('path') || '');
+          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
           if (!parts.length) throw fail(400, 'cannot_delete_root', '不能刪除分享資料夾本身。');
-          await rejectSymlinkTraversal(root, target);
+          await rejectSymlinkTraversal(dataDir, root, target);
           const info = await lstat(target).catch(() => null);
           if (!info || info.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
           const id = crypto.randomUUID();
-          const storedPath = path.join(dataDir, 'trash', share.id, id);
+          const storedPath = managedTrashPath(share.id, id);
+          await rejectSymlinkTraversal(dataDir, dataDir, path.dirname(storedPath), false);
           await mkdir(path.dirname(storedPath), { recursive: true });
+          await rejectSymlinkTraversal(dataDir, dataDir, storedPath, false);
           await rename(target, storedPath);
           try {
             db.prepare(`INSERT INTO trash_items(id, share_id, original_path, stored_path, item_name, is_directory, deleted_by, deleted_at) VALUES(?,?,?,?,?,?,?,?)`)
@@ -434,6 +570,7 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
         if (route === '/api/trash' && method === 'GET') {
           const shareId = url.searchParams.get('shareId') || '';
           requirePermission(user, shareId, true);
+          shareRoot(shareId);
           const rows = db.prepare(`SELECT id, item_name AS name, is_directory AS isDirectory, deleted_at AS deletedAt FROM trash_items WHERE share_id = ? ORDER BY deleted_at DESC`).all(shareId);
           return json(res, 200, { items: rows.map((row) => ({ ...row, isDirectory: Boolean(row.isDirectory) })) });
         }
@@ -443,12 +580,14 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
           requirePermission(user, row.share_id, true);
           const { root } = shareRoot(row.share_id);
-          const destination = resolveInside(root, row.original_path);
-          await rejectSymlinkTraversal(root, destination.target, false);
+          const destination = resolveShareInside(root, row.original_path);
+          await rejectSymlinkTraversal(dataDir, root, destination.target, false);
           const parentInfo = await stat(path.dirname(destination.target)).catch(() => null);
           if (!parentInfo?.isDirectory()) throw fail(409, 'restore_parent_missing', '原本的資料夾已不存在，請先建立資料夾。');
           if (await stat(destination.target).catch(() => null)) throw fail(409, 'restore_conflict', '原位置已有同名項目，請先重新命名或移動該項目。');
-          await rename(row.stored_path, destination.target);
+          const storedPath = managedTrashPath(row.share_id, row.id);
+          await rejectSymlinkTraversal(dataDir, dataDir, storedPath);
+          await rename(storedPath, destination.target);
           db.prepare('DELETE FROM trash_items WHERE id = ?').run(row.id);
           return json(res, 200, { ok: true });
         }
@@ -457,7 +596,10 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           const id = url.searchParams.get('id') || '';
           const row = db.prepare('SELECT * FROM trash_items WHERE id = ?').get(id);
           if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
-          await rm(row.stored_path, { recursive: true, force: true });
+          shareRoot(row.share_id);
+          const storedPath = managedTrashPath(row.share_id, row.id);
+          await rejectSymlinkTraversal(dataDir, dataDir, storedPath);
+          await rm(storedPath, { recursive: true, force: true });
           db.prepare('DELETE FROM trash_items WHERE id = ?').run(id);
           return json(res, 200, { ok: true });
         }
@@ -486,7 +628,7 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
           return json(res, 201, { user: getUserById.get(userId) });
         }
         if (route === '/api/network' && method === 'GET') {
-          return json(res, 200, { host: '127.0.0.1', port: server.address()?.port, localOnly: true, interfaces: Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) => (addresses || []).filter((item) => !item.internal).map((item) => ({ name, address: item.address, family: item.family }))) });
+          return json(res, 200, { host: '127.0.0.1', port: server.address()?.port, localOnly: true, interfaces: listNetworkInterfaces() });
         }
         throw fail(404, 'not_found', '找不到這個功能。');
       }

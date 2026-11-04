@@ -4,6 +4,7 @@ release/
 out/
 coverage/
 /data/
+/NanakoData/
 /files/
 /trash/
 *.tmp
@@ -13,3 +14,4 @@ coverage/
 .env
 .DS_Store
 Thumbs.db
+/work/
