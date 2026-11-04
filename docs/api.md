@@ -33,12 +33,27 @@
 | `POST /api/users` | 是 | 僅管理員；JSON `{ "username", "password", "permissions": [{ "shareId", "canRead", "canWrite" }] }`。 |
 | `GET /api/network` | 是 | 回報目前本機服務資訊與網路介面清單；不會啟用區域網路連線或改變網路設定。 |
 | `GET /api/system` | 是 | 僅管理員；查看本機電腦名稱、Windows 版本／組建、處理器、記憶體、Nanako 資料磁碟容量及網路介面資訊。 |
+| `POST /api/activity` | 是 | 記錄使用者開啟 Nanako 畫面的操作；JSON `{ "view" }`，僅接受已知畫面代碼，管理畫面限管理員。 |
+| `POST /api/archive/create` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，在來源旁建立同名 ZIP。來源、暫存與輸出都限制在 Nanako 資料空間。 |
+| `POST /api/archive/extract` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，只接受 ZIP，解壓至同名新資料夾；不覆寫現有資料。拒絕路徑跳脫、符號連結、加密 ZIP、衝突路徑及超出大小／項目數限制的封存檔。 |
+| `GET /api/audit-settings` | 是 | 僅管理員；回傳操作紀錄自動清除期限及允許選項（1、3、7、30、90、180、365 日）。 |
+| `POST /api/audit-settings` | 是 | 僅管理員；JSON `{ "retentionDays" }`；調整保留期限後立即清理逾期紀錄。預設 30 日。 |
+| `GET /api/audit-logs` | 是 | 僅管理員；回傳保留期限內最近 500 筆操作紀錄。 |
+| `DELETE /api/audit-logs` | 是 | 僅管理員；JSON `{ "confirmText": "刪除所有紀錄" }`；刪除所有使用者操作紀錄。錯誤確認文字回傳 `400`。 |
 
 `path` 是分享資料夾內的相對路徑；不可使用絕對路徑或跳脫路徑。名稱須符合 Windows 檔名限制。實際狀態碼與回應內容以 `src/server.mjs` 和 `test/server.test.mjs` 為準。
 
 檔案 API 的根目錄固定為可攜式執行檔所在位置的 `NanakoData/data/files/<shareId>`；API 不接受外部路徑、磁碟代號或資料夾選擇請求。`/api/download` 只傳回該根目錄內的檔案；`DELETE /api/files` 與資源回收桶只操作 `NanakoData/data/trash`。相簿和播放器也只能讀取這些 Nanako 資料空間。Renderer 送入的 `path` 一律是分享資料空間內的相對路徑；伺服器會拒絕資料目錄中的符號連結／重新解析點。
 
 `/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。播放器的相容性測試只能選取目前 Nanako 分享資料空間的檔案，並透過同一個受權限檢查的 Range API 串流播放；不會開啟檔案系統選擇器或讀取外部媒體路徑。
+
+## 操作紀錄
+
+使用者登入／登出、畫面切換、資料夾瀏覽、檔案匯入／下載／預覽／移至回收桶、還原／永久刪除、使用者管理、ZIP 壓縮／解壓縮及保留期限變更會記錄在 `NanakoData\data\metadata.sqlite`。管理員可查看所有帳號的操作紀錄；一般使用者不能查看、修改保留期限或刪除紀錄。每次開啟本機設定頁最多顯示最近 500 筆。
+
+紀錄包含時間、使用者、操作、必要的目標名稱／相對路徑與成功／失敗結果；不儲存密碼、工作階段權杖或檔案內容。背景輪詢與影音播放的逐段 HTTP Range 請求不各自重複寫入。系統於啟動、每小時、調整期限及讀取紀錄時清除逾期資料。手動刪除須於 Nanako 防呆視窗輸入「刪除所有紀錄」，伺服器也會再次驗證確認文字；為確實清空，清除動作本身不會留在已刪除的紀錄中。
+
+ZIP 使用單一 `zip.js` 套件串流建立／解壓；每次操作最多 10,000 個項目、解壓後 20 GiB，並拒絕壓縮比大於 1,000 的大型項目。失敗時會移除 Nanako 暫存檔。此功能已通過本機小型整合測試；Windows 檔案總管互通性、大檔案記憶體量測、取消與多種損毀 ZIP 測試仍待完成。ZIP 不提供加密或密碼保護，也不會處理未來加密空間中的物件。
 
 ## 外部整合 API 的後續設計
 

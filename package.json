@@ -51,5 +51,8 @@
     "portable": {
       "artifactName": "Nanako-${version}-${arch}-portable.${ext}"
     }
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "2.24.0"
   }
 }

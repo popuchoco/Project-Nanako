@@ -22,10 +22,11 @@ Renderer（public/） ─── /api/* ───► HTTP 路由與驗證／授�
                                         └─ 本機檔案系統（含 Range 媒體串流）
 ```
 
-Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口、狀態提示與可移動的內部應用程式視窗；這是應用程式自己的 UI，不會呼叫 Windows Shell。加密空間及 ZIP 操作都尚在規劃階段，現有檔案內容仍以一般檔案儲存，不能視為已加密；目前也沒有 ZIP 壓縮／解壓縮功能。
+Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口、狀態提示與可移動的內部應用程式視窗；這是應用程式自己的 UI，不會呼叫 Windows Shell。一般檔案 ZIP 串流建立／解壓縮原型及本機操作紀錄已實作；加密空間仍在規劃，現有一般檔案不能視為已加密。
 
 - `electron/main.mjs`：桌面生命週期、視窗安全設定、啟停 HTTP 服務。
-- `src/server.mjs`：本機 HTTP API、登入、權限檢查、檔案／資源回收桶作業、靜態檔案。
+- `src/server.mjs`：本機 HTTP API、登入、權限檢查、操作紀錄、檔案／資源回收桶／ZIP 作業、靜態檔案。
+- `src/archives.mjs`：限制 NanakoData 路徑範圍的 ZIP 串流建立與解壓縮、中央目錄／路徑／CRC／大小驗證。
 - `src/run.mjs`：供開發及測試使用的命令列啟動器。
 - `public/`：繁體中文（台灣）介面，透過同源 HTTP 呼叫 API。
 - `test/`：使用暫存資料目錄的 API 整合測試。
@@ -34,7 +35,7 @@ Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口、狀
 
 ```text
 <dataDir>/
-  metadata.sqlite       使用者、分享資料夾、權限、工作階段與資源回收桶索引
+  metadata.sqlite       使用者、分享資料夾、權限、工作階段、操作紀錄與應用程式設定
   files/<share-id>/     分享資料夾內容
   trash/<share-id>/<id> 待清除或還原的檔案
 ```
@@ -52,13 +53,13 @@ Windows 可攜式封裝會將設定檔、工作階段及資料分別放在執行
 - 圖片／音訊／影片透過受權限檢查的 `/api/preview` 提供；支援單一 byte range，以便瀏覽器 seek 影片或音訊。
 - Electron renderer 設定 `contextIsolation` 與 `sandbox`，停用 `nodeIntegration`，並拒絕外部視窗與非本機導覽。
 
-尚未實作登入節流、密碼重設、多因素驗證、使用者停用／刪除、稽核紀錄、API token 或遠端授權。不得將本原型的工作階段設計直接用於對外網路服務。
+尚未實作登入節流、密碼重設、多因素驗證、使用者停用／刪除、API token 或遠端授權。操作紀錄由本機管理員控制保留與刪除，不是防竄改帳本；不得將本原型的工作階段設計直接用於對外網路服務。
 
 ## 加密與封存演進（尚未實作）
 
 加密空間提案將 vault 密文物件、加密中繼資料與一般 Nanako 檔案區隔；解鎖金鑰由主程序控管，Renderer 不接觸金鑰。格式候選為 Node.js 內建 `crypto` 提供的認證加密原語，並以固定大小區塊維持大檔案串流與受控 Range 讀取。這些只是候選設計，須先完成威脅模型、nonce／AAD 格式審查、復原 UX、篡改測試與 crash-consistency 測試。
 
-ZIP 規劃先限定一般 Nanako 檔案並以串流方式建立／解壓，進出路徑固定於 NanakoData。建立與解壓都先寫入範圍內的暫存位置，驗證成功後才提交；路徑正規化、符號連結拒絕、Zip Slip／zip bomb 防護及不覆寫策略必須在伺服器端落實。vault 與 ZIP 初期分開，避免誤產生明文暫存。
+ZIP 原型先限定一般 Nanako 檔案並以串流方式建立／解壓，進出路徑固定於 NanakoData。建立與解壓都先寫入範圍內的暫存位置，驗證成功後才提交；伺服器拒絕路徑跳脫、符號連結、Zip Slip、衝突路徑及超限項目。大檔案效能、取消與 Windows 檔案總管互通性仍待驗證。vault 與 ZIP 初期分開，避免誤產生明文暫存。
 
 詳細階段、API 草案、金鑰模型候選及驗收條件見 [加密空間與 ZIP 規劃](feature-plan-encryption-and-archives.md)、[ADR-0009](decisions/ADR-0009-encrypted-vault-design.md) 與 [ADR-0010](decisions/ADR-0010-zip-archive-design.md)。
 

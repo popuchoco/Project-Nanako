@@ -36,7 +36,7 @@
         <span class="system-local-status"><i class="status-dot" aria-hidden="true"></i><span>本機</span></span>
         <span id="desktop-clock" class="desktop-clock" aria-label="目前時間"></span>
         <button id="desktop-account" class="system-bar-button account-chip" type="button" aria-label="帳號選項"><span class="account-avatar" aria-hidden="true">用</span><span id="account-name" class="account-name"></span></button>
-        <button id="desktop-settings" class="system-bar-button system-settings admin-only" data-open-view="system" type="button" aria-label="電腦資訊" title="電腦資訊">⚙</button>
+        <button id="desktop-settings" class="system-bar-button system-settings admin-only" data-open-view="settings" type="button" aria-label="系統設定" title="系統設定">⚙</button>
       </div>
     </header>
 
@@ -69,6 +69,7 @@
         <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
         <button class="nav-item" data-view="computer"><span class="nav-glyph" aria-hidden="true">▣</span>我的電腦</button>
         <button class="nav-item admin-only" data-view="system"><span class="nav-glyph" aria-hidden="true">▦</span>電腦資訊</button>
+        <button class="nav-item admin-only" data-view="settings"><span class="nav-glyph" aria-hidden="true">⚙</span>系統設定與紀錄</button>
         <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
       </nav>
       <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">Nanako 桌面版 0.2</span></div>
@@ -142,6 +143,25 @@
         <div id="system-information" class="system-grid" aria-live="polite"><div class="card">讀取電腦資訊中…</div></div>
       </section>
 
+      <section id="view-settings" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>系統設定與操作紀錄</h2><p class="muted">操作紀錄儲存在 NanakoData。本機管理員可設定自動清除期限及管理所有使用者的紀錄。</p></div></div>
+        <section class="card audit-settings-card" aria-labelledby="audit-settings-title">
+          <div class="content-heading"><div><h3 id="audit-settings-title">操作紀錄保留期限</h3><p class="muted">到期紀錄會自動清除。紀錄會包含操作項目名稱或路徑；密碼、工作階段權杖及檔案內容不會寫入紀錄。</p></div></div>
+          <form id="audit-settings-form" class="audit-settings-form">
+            <label for="audit-retention">自動清除期限</label>
+            <select id="audit-retention" name="retentionDays">
+              <option value="1">1 日</option><option value="3">3 日</option><option value="7">7 日</option><option value="30">30 日</option><option value="90">90 日</option><option value="180">180 日</option><option value="365">365 日</option>
+            </select>
+            <button id="save-audit-settings" class="button primary" type="submit">儲存設定</button>
+          </form>
+          <p id="audit-settings-message" class="inline-message" role="status" hidden></p>
+        </section>
+        <section class="card audit-log-card" aria-labelledby="audit-log-title">
+          <div class="content-heading"><div><h3 id="audit-log-title">使用者操作紀錄</h3><p id="audit-log-summary" class="muted">最近的操作會顯示在這裡。</p></div><div class="toolbar"><button id="refresh-audit-logs" class="button secondary" type="button">重新整理</button><button id="clear-audit-logs" class="button danger" type="button">刪除所有使用者操作紀錄</button></div></div>
+          <div class="table-wrap"><table><thead><tr><th scope="col">時間</th><th scope="col">使用者</th><th scope="col">操作</th><th scope="col">項目</th><th scope="col">結果</th></tr></thead><tbody id="audit-log-list"></tbody></table><div id="empty-audit-logs" class="empty-state" hidden><strong>目前沒有操作紀錄</strong><span>之後的使用者操作會依保留期限保存。</span></div></div>
+        </section>
+      </section>
+
       <section id="view-network" class="view-panel" hidden>
         <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">目前版本只接受本機連線，不會開放區域網路存取。</p></div></div>
         <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機模式</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>區域網路分享尚未啟用</strong><p>網路介面卡選擇、連接埠設定與 TLS 憑證管理會在後續階段加入；本原型不會變更 Windows 防火牆或路由器設定。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
@@ -159,7 +179,8 @@
           <button data-open-view="player" type="button"><span class="launcher-icon player-art" aria-hidden="true">▶</span>播放器</button>
           <button data-open-view="trash" type="button"><span class="launcher-icon trash-art" aria-hidden="true">▤</span>資源回收桶</button>
           <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>我的電腦</button>
-          <button class="admin-only" data-open-view="system" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⚙</span>電腦資訊</button>
+          <button class="admin-only" data-open-view="settings" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⚙</span>系統設定</button>
+          <button class="admin-only" data-open-view="system" type="button"><span class="launcher-icon computer-art" aria-hidden="true">▦</span>電腦資訊</button>
         </div>
         <div class="launcher-footer"><span><i class="status-dot" aria-hidden="true"></i>本機服務運作中</span><span>資料僅存於 NanakoData</span></div>
       </section>
@@ -174,6 +195,15 @@
   <dialog id="photo-dialog" class="photo-dialog" aria-labelledby="photo-caption">
     <div class="photo-dialog-toolbar"><button id="photo-prev" class="button secondary" type="button">上一張</button><button id="photo-close" class="button ghost" type="button">關閉</button><button id="photo-next" class="button secondary" type="button">下一張</button></div>
     <figure><img id="photo-image" alt=""><figcaption id="photo-caption"></figcaption></figure>
+  </dialog>
+  <dialog id="clear-audit-dialog" class="confirm-dialog" aria-labelledby="clear-audit-title">
+    <form id="clear-audit-form" method="dialog" class="confirm-dialog-content">
+      <h2 id="clear-audit-title">刪除所有使用者操作紀錄？</h2>
+      <p>這會刪除所有使用者的操作紀錄，且無法還原。之後的新操作會繼續記錄。</p>
+      <label for="clear-audit-confirm">請輸入「刪除所有紀錄」以確認</label>
+      <input id="clear-audit-confirm" autocomplete="off" required>
+      <div class="confirm-dialog-actions"><button id="cancel-clear-audit" class="button secondary" type="button">取消</button><button id="confirm-clear-audit" class="button danger" type="submit" disabled>刪除所有紀錄</button></div>
+    </form>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="/app.js"></script>

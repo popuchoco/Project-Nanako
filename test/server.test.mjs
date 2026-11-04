@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
+import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
 import { startServer } from '../src/server.mjs';
 
 async function setupServer(t, options = {}) {
@@ -180,4 +181,111 @@ test('system information is restricted to the local administrator', async (t) =>
   const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'sys-viewer', password: 'system-viewer-passphrase-2026' }) });
   const denied = await request('/api/system', { headers: { Cookie: login.response.headers.get('set-cookie').split(';')[0] } });
   assert.equal(denied.response.status, 403);
+});
+
+test('operation history supports retention settings, automatic pruning and defensive clear confirmation', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const defaults = await request('/api/audit-settings', { headers: { Cookie: cookie } });
+  assert.equal(defaults.response.status, 200);
+  assert.equal(defaults.body.retentionDays, 30);
+  assert.deepEqual(defaults.body.options, [1, 3, 7, 30, 90, 180, 365]);
+
+  await request('/api/activity', { method: 'POST', headers: auth, body: JSON.stringify({ view: 'album' }) });
+  await request('/api/folders', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: '', name: '紀錄測試' }) });
+  const history = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.equal(history.response.status, 200);
+  assert.ok(history.body.logs.some((item) => item.action === '開啟畫面' && item.target === '相簿'));
+  assert.ok(history.body.logs.some((item) => item.action === '建立資料夾' && item.target === '紀錄測試'));
+  assert.equal(JSON.stringify(history.body).includes('local-test-passphrase'), false);
+
+  const invalidSetting = await request('/api/audit-settings', { method: 'POST', headers: auth, body: JSON.stringify({ retentionDays: 2 }) });
+  assert.equal(invalidSetting.response.status, 400);
+  const save = await request('/api/audit-settings', { method: 'POST', headers: auth, body: JSON.stringify({ retentionDays: 1 }) });
+  assert.equal(save.response.status, 200);
+  const db = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  db.prepare('UPDATE operation_logs SET occurred_at = ?').run(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  db.close();
+  const afterPrune = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.equal(afterPrune.body.logs.length, 0);
+
+  const notConfirmed = await request('/api/audit-logs', { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: 'yes' }) });
+  assert.equal(notConfirmed.response.status, 400);
+  const cleared = await request('/api/audit-logs', { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '刪除所有紀錄' }) });
+  assert.equal(cleared.response.status, 200);
+  const empty = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.deepEqual(empty.body.logs, []);
+
+  const addUser = await request('/api/users', { method: 'POST', headers: auth, body: JSON.stringify({ username: 'log-reader', password: 'log-reader-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: true }] }) });
+  assert.equal(addUser.response.status, 201);
+  const restartedHistory = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.ok(restartedHistory.body.logs.some((item) => item.action === '建立使用者' && item.target === 'log-reader'));
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'log-reader', password: 'log-reader-passphrase-2026' }) });
+  const readerCookie = login.response.headers.get('set-cookie').split(';')[0];
+  const forbidden = await request('/api/audit-logs', { headers: { Cookie: readerCookie } });
+  assert.equal(forbidden.response.status, 403);
+});
+
+test('ZIP compression and extraction stream Nanako files without leaving partial outputs', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const uploadQuery = new URLSearchParams({ shareId, path: '', name: 'notes.txt' });
+  const uploaded = await request(`/api/upload?${uploadQuery}`, { method: 'POST', headers: { Cookie: cookie }, body: Buffer.from('Nanako ZIP 串流測試') });
+  assert.equal(uploaded.response.status, 201);
+
+  const create = await request('/api/archive/create', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'notes.txt' }) });
+  assert.equal(create.response.status, 201, JSON.stringify(create.body));
+  assert.equal(create.body.name, 'notes.zip');
+  assert.ok(create.body.size > 0);
+
+  const extract = await request('/api/archive/extract', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'notes.zip' }) });
+  assert.equal(extract.response.status, 201, JSON.stringify(extract.body));
+  const restored = await request(`/api/download?${new URLSearchParams({ shareId, path: 'notes/notes.txt' })}`, { headers: { Cookie: cookie } });
+  assert.equal(restored.response.status, 200);
+  assert.equal(restored.body, 'Nanako ZIP 串流測試');
+  const history = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.ok(history.body.logs.some((item) => item.action === '建立 ZIP 壓縮檔' && item.target === 'notes.txt'));
+  assert.ok(history.body.logs.some((item) => item.action === '解壓縮 ZIP 檔案' && item.target === 'notes.zip'));
+});
+
+test('ZIP Slip entries are rejected before extraction writes outside Nanako storage', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const shareRoot = path.join(dataDir, 'files', shareId);
+  const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
+  await writer.add('../outside.txt', new TextReader('不應被寫出資料空間'));
+  await writeFile(path.join(shareRoot, 'unsafe.zip'), Buffer.from(await (await writer.close()).arrayBuffer()));
+
+  const result = await request('/api/archive/extract', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shareId, path: 'unsafe.zip' }),
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, 'invalid_archive');
+  assert.equal(await readFile(path.join(dataDir, 'files', 'outside.txt')).catch(() => null), null);
+  assert.equal(await readFile(path.join(shareRoot, 'unsafe', 'outside.txt')).catch(() => null), null);
+});
+
+test('directory ZIP archives preserve nested files and empty directories', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const createFolder = await request('/api/folders', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: '', name: 'collection' }) });
+  assert.equal(createFolder.response.status, 201);
+  const createEmptyFolder = await request('/api/folders', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'collection', name: 'empty' }) });
+  assert.equal(createEmptyFolder.response.status, 201);
+  const upload = await request(`/api/upload?${new URLSearchParams({ shareId, path: 'collection', name: 'inside.txt' })}`, { method: 'POST', headers: { Cookie: cookie }, body: Buffer.from('nested archive item') });
+  assert.equal(upload.response.status, 201);
+  const archive = await request('/api/archive/create', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'collection' }) });
+  assert.equal(archive.response.status, 201, JSON.stringify(archive.body));
+
+  await request(`/api/files?${new URLSearchParams({ shareId, path: 'collection' })}`, { method: 'DELETE', headers: { Cookie: cookie } });
+  const extraction = await request('/api/archive/extract', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'collection.zip' }) });
+  assert.equal(extraction.response.status, 201, JSON.stringify(extraction.body));
+  const nested = await request(`/api/download?${new URLSearchParams({ shareId, path: 'collection/inside.txt' })}`, { headers: { Cookie: cookie } });
+  assert.equal(nested.body, 'nested archive item');
+  const listing = await request(`/api/files?${new URLSearchParams({ shareId, path: 'collection' })}`, { headers: { Cookie: cookie } });
+  assert.ok(listing.body.items.some((item) => item.name === 'empty' && item.isDirectory));
 });

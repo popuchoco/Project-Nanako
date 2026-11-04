@@ -10,6 +10,7 @@ import { Transform } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { createArchive, extractArchive } from './archives.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 const execFileAsync = promisify(execFile);
@@ -18,6 +19,8 @@ const publicRoot = path.join(projectRoot, 'public');
 const SESSION_SECONDS = 12 * 60 * 60;
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+const AUDIT_RETENTION_OPTIONS = Object.freeze([1, 3, 7, 30, 90, 180, 365]);
+const DEFAULT_AUDIT_RETENTION_DAYS = 30;
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
@@ -193,7 +196,18 @@ function initDatabase(dataDir) {
       original_path TEXT NOT NULL, stored_path TEXT NOT NULL, item_name TEXT NOT NULL,
       is_directory INTEGER NOT NULL, deleted_by TEXT NOT NULL, deleted_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS app_settings (
+      setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS operation_logs (
+      id TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL, actor_id TEXT,
+      actor_name TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL,
+      outcome TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS operation_logs_occurred_at_idx ON operation_logs(occurred_at DESC);
   `);
+  db.prepare('INSERT OR IGNORE INTO app_settings(setting_key, setting_value) VALUES(?, ?)')
+    .run('audit_retention_days', String(DEFAULT_AUDIT_RETENTION_DAYS));
   const shareColumns = new Set(db.prepare('PRAGMA table_info(shares)').all().map((column) => column.name));
   if (!shareColumns.has('storage_path')) db.exec('ALTER TABLE shares ADD COLUMN storage_path TEXT');
   if (!shareColumns.has('source_type')) db.exec("ALTER TABLE shares ADD COLUMN source_type TEXT NOT NULL DEFAULT 'managed'");
@@ -310,6 +324,36 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
   }
   const db = initDatabase(dataDir);
+  const readAuditRetentionDays = () => {
+    const raw = db.prepare("SELECT setting_value FROM app_settings WHERE setting_key = 'audit_retention_days'").get()?.setting_value;
+    const days = Number(raw);
+    return AUDIT_RETENTION_OPTIONS.includes(days) ? days : DEFAULT_AUDIT_RETENTION_DAYS;
+  };
+  const purgeExpiredAuditLogs = () => {
+    const cutoff = Date.now() - readAuditRetentionDays() * 24 * 60 * 60 * 1000;
+    db.prepare('DELETE FROM operation_logs WHERE occurred_at < ?').run(cutoff);
+  };
+  purgeExpiredAuditLogs();
+
+  function auditForRequest(user, method, route, url) {
+    const target = (value) => String(value || '').replace(/[\r\n\0]/gu, ' ').slice(0, 512);
+    if (method === 'GET' && route === '/api/files') return { action: '瀏覽資料夾', target: target(url.searchParams.get('path') || '主資料夾') };
+    if (method === 'GET' && route === '/api/preview') return { action: '開啟媒體預覽', target: target(url.searchParams.get('path')) };
+    if (method === 'GET' && route === '/api/download') return { action: '下載檔案', target: target(url.searchParams.get('path')) };
+    if (method === 'POST' && route === '/api/folders') return { action: '建立資料夾', target: target(url.searchParams.get('path')) };
+    if (method === 'POST' && route === '/api/upload') return { action: '匯入檔案', target: target(`${url.searchParams.get('path') ? `${url.searchParams.get('path')}/` : ''}${url.searchParams.get('name')}`) };
+    if (method === 'DELETE' && route === '/api/files') return { action: '移至資源回收桶', target: target(url.searchParams.get('path')) };
+    if (method === 'GET' && route === '/api/trash') return { action: '檢視資源回收桶', target: '資源回收桶' };
+    if (method === 'POST' && route === '/api/trash/restore') return { action: '還原資源回收桶項目', target: '資源回收桶項目' };
+    if (method === 'DELETE' && route === '/api/trash') return { action: '永久刪除資源回收桶項目', target: '資源回收桶項目' };
+    if (method === 'POST' && route === '/api/users') return { action: '建立使用者', target: '使用者帳號' };
+    if (method === 'GET' && route === '/api/users') return { action: '檢視使用者清單', target: '使用者與權限' };
+    if (method === 'POST' && route === '/api/archive/create') return { action: '建立 ZIP 壓縮檔', target: target(url.searchParams.get('path')) };
+    if (method === 'POST' && route === '/api/archive/extract') return { action: '解壓縮 ZIP 檔案', target: target(url.searchParams.get('path')) };
+    if (method === 'POST' && route === '/api/audit-settings') return { action: '更新操作紀錄保留期限', target: '操作紀錄設定' };
+    if (method === 'DELETE' && route === '/api/audit-logs') return { action: '刪除所有操作紀錄', target: '所有使用者' };
+    return null;
+  }
 
   const findUser = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE');
   const getUserById = db.prepare('SELECT id, username, role, created_at FROM users WHERE id = ?');
@@ -348,6 +392,19 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
 
   const server = createServer(async (req, res) => {
+    let auditEvent = null;
+    let auditLogged = false;
+    const setAudit = (actor, action, target) => {
+      auditEvent = { actorId: actor?.id || null, actorName: String(actor?.username || '未知使用者').replace(/[\r\n\0]/gu, ' ').slice(0, 80), action: String(action).replace(/[\r\n\0]/gu, ' ').slice(0, 80), target: String(target || '').replace(/[\r\n\0]/gu, ' ').slice(0, 512) };
+    };
+    res.once('finish', () => {
+      if (!auditEvent || auditLogged) return;
+      auditLogged = true;
+      try {
+        db.prepare('INSERT INTO operation_logs(id, occurred_at, actor_id, actor_name, action, target, outcome) VALUES(?,?,?,?,?,?,?)')
+          .run(crypto.randomUUID(), Date.now(), auditEvent.actorId, auditEvent.actorName, auditEvent.action, auditEvent.target, res.statusCode >= 400 ? '失敗' : '成功');
+      } catch (error) { console.error('無法寫入操作紀錄。', error); }
+    });
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -369,6 +426,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) throw fail(409, 'already_setup', '已完成初始設定。');
           const body = await readJson(req);
           const username = validateUsername(body.username);
+          setAudit({ username }, '建立本機管理員', username);
           const pass = await passwordHash(body.password);
           const userId = crypto.randomUUID();
           const shareId = crypto.randomUUID();
@@ -387,21 +445,40 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         }
         if (route === '/api/login' && method === 'POST') {
           const body = await readJson(req);
+          const attemptedUsername = String(body.username || '').slice(0, 80);
+          setAudit({ username: attemptedUsername || '未知使用者' }, '登入', attemptedUsername);
           const user = findUser.get(String(body.username || ''));
           const valid = user && await verifyPassword(String(body.password || ''), user.password_salt, user.password_hash);
           if (!valid) throw fail(401, 'invalid_login', '帳號或密碼不正確。');
+          setAudit(user, '登入', user.username);
           const token = crypto.randomBytes(32).toString('base64url');
           db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
           return json(res, 200, { user: getUserById.get(user.id) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
         }
         if (route === '/api/logout' && method === 'POST') {
           const token = cookieValue(req, 'localnas_session');
+          const session = token ? db.prepare('SELECT user_id FROM sessions WHERE token_hash = ?').get(hashToken(token)) : null;
+          const signedOutUser = session ? getUserById.get(session.user_id) : null;
+          if (signedOutUser) setAudit(signedOutUser, '登出', signedOutUser.username);
           if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
           return json(res, 200, { ok: true }, { 'Set-Cookie': 'localnas_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
         }
 
         const user = await currentUser(req);
         if (!user) throw fail(401, 'authentication_required', '請先登入。');
+        const inferredAudit = auditForRequest(user, method, route, url);
+        if (inferredAudit) setAudit(user, inferredAudit.action, inferredAudit.target);
+
+        if (route === '/api/activity' && method === 'POST') {
+          const body = await readJson(req);
+          const views = {
+            files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶',
+            users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態',
+          };
+          if (!views[body.view] || (['users', 'system', 'settings'].includes(body.view) && user.role !== 'admin')) throw fail(400, 'invalid_activity', '操作紀錄類型不正確。');
+          setAudit(user, '開啟畫面', views[body.view]);
+          return json(res, 200, { ok: true });
+        }
 
         if (route === '/api/me' && method === 'GET') return json(res, 200, { user });
         if (route === '/api/shares' && method === 'GET') {
@@ -440,6 +517,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         }
         if (route === '/api/folders' && method === 'POST') {
           const body = await readJson(req);
+          if (auditEvent) auditEvent.target = `${body.path ? `${String(body.path).slice(0, 256)}/` : ''}${String(body.name || '').slice(0, 180)}`.slice(0, 512);
           const shareId = String(body.shareId || '');
           requirePermission(user, shareId, true);
           const { root } = shareRoot(shareId);
@@ -457,6 +535,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const { root } = shareRoot(shareId);
           const parent = resolveShareInside(root, url.searchParams.get('path') || '');
           const name = safeName(url.searchParams.get('name') || '');
+          if (auditEvent) auditEvent.target = `${url.searchParams.get('path') ? `${url.searchParams.get('path')}/` : ''}${name}`.slice(0, 512);
           await rejectSymlinkTraversal(dataDir, root, parent.target);
           if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
           const target = path.join(parent.target, name);
@@ -487,6 +566,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           if (!contentType) throw fail(415, 'preview_not_supported', '目前不支援預覽或播放這個檔案格式，請下載查看。');
 
           const rangeHeader = req.headers.range;
+          if (rangeHeader && auditEvent) auditEvent = null;
           let range = null;
           if (rangeHeader) {
             const match = /^bytes=(\d*)-(\d*)$/iu.exec(rangeHeader.trim());
@@ -578,6 +658,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const body = await readJson(req);
           const row = db.prepare('SELECT * FROM trash_items WHERE id = ?').get(String(body.id || ''));
           if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
+          if (auditEvent) auditEvent.target = row.item_name;
           requirePermission(user, row.share_id, true);
           const { root } = shareRoot(row.share_id);
           const destination = resolveShareInside(root, row.original_path);
@@ -596,6 +677,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const id = url.searchParams.get('id') || '';
           const row = db.prepare('SELECT * FROM trash_items WHERE id = ?').get(id);
           if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
+          if (auditEvent) auditEvent.target = row.item_name;
           shareRoot(row.share_id);
           const storedPath = managedTrashPath(row.share_id, row.id);
           await rejectSymlinkTraversal(dataDir, dataDir, storedPath);
@@ -612,6 +694,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
           const body = await readJson(req);
           const username = validateUsername(body.username);
+          if (auditEvent) auditEvent.target = username;
           if (findUser.get(username)) throw fail(409, 'username_taken', '這個帳號已經有人使用。');
           const pass = await passwordHash(body.password);
           const userId = crypto.randomUUID();
@@ -626,6 +709,61 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             grant.run(userId, item.shareId, Number(canRead), Number(canWrite));
           }
           return json(res, 201, { user: getUserById.get(userId) });
+        }
+        if (route === '/api/audit-settings' && method === 'GET') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看操作紀錄設定。');
+          return json(res, 200, { retentionDays: readAuditRetentionDays(), options: AUDIT_RETENTION_OPTIONS });
+        }
+        if (route === '/api/audit-settings' && method === 'POST') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以調整操作紀錄設定。');
+          const body = await readJson(req);
+          const days = Number(body.retentionDays);
+          if (!AUDIT_RETENTION_OPTIONS.includes(days)) throw fail(400, 'invalid_retention', '請選擇 1、3、7、30、90、180 或 365 日。');
+          db.prepare("UPDATE app_settings SET setting_value = ? WHERE setting_key = 'audit_retention_days'").run(String(days));
+          if (auditEvent) auditEvent.target = `${days} 日`;
+          purgeExpiredAuditLogs();
+          return json(res, 200, { retentionDays: days, options: AUDIT_RETENTION_OPTIONS });
+        }
+        if (route === '/api/audit-logs' && method === 'GET') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看操作紀錄。');
+          purgeExpiredAuditLogs();
+          const logs = db.prepare(`SELECT id, occurred_at AS occurredAt, actor_name AS actorName, action, target, outcome
+            FROM operation_logs ORDER BY occurred_at DESC LIMIT 500`).all().map((item) => ({ ...item, occurredAt: new Date(item.occurredAt).toISOString() }));
+          return json(res, 200, { logs, retentionDays: readAuditRetentionDays() });
+        }
+        if (route === '/api/audit-logs' && method === 'DELETE') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以刪除操作紀錄。');
+          const body = await readJson(req);
+          if (body.confirmText !== '刪除所有紀錄') throw fail(400, 'confirmation_required', '請輸入「刪除所有紀錄」確認操作。');
+          db.exec('DELETE FROM operation_logs');
+          auditEvent = null;
+          return json(res, 200, { ok: true });
+        }
+        if ((route === '/api/archive/create' || route === '/api/archive/extract') && method === 'POST') {
+          const body = await readJson(req);
+          const shareId = String(body.shareId || '');
+          requirePermission(user, shareId, true);
+          const { root } = shareRoot(shareId);
+          const parts = relativeParts(body.path || '');
+          if (!parts.length) throw fail(400, 'invalid_path', '請先選取要處理的檔案或資料夾。');
+          const source = resolveShareInside(root, parts.join('/'));
+          await rejectSymlinkTraversal(dataDir, root, source.target);
+          const sourceInfo = await lstat(source.target).catch(() => null);
+          if (!sourceInfo) throw fail(404, 'file_not_found', '找不到要處理的檔案或資料夾。');
+          if (route === '/api/archive/create') {
+            const archiveName = `${path.parse(source.target).name || path.basename(source.target)}.zip`;
+            const archivePath = path.join(path.dirname(source.target), archiveName);
+            await rejectSymlinkTraversal(dataDir, root, archivePath, false);
+            if (auditEvent) auditEvent.target = parts.join('/');
+            const result = await createArchive({ sourcePath: source.target, shareRoot: root, archivePath });
+            return json(res, 201, { ok: true, name: archiveName, ...result });
+          }
+          if (sourceInfo.isDirectory() || path.extname(source.target).toLowerCase() !== '.zip') throw fail(400, 'invalid_archive_source', '請選取 ZIP 檔案進行解壓縮。');
+          const destinationPath = path.join(path.dirname(source.target), path.basename(source.target, path.extname(source.target)));
+          await rejectSymlinkTraversal(dataDir, root, destinationPath, false);
+          if (auditEvent) auditEvent.target = parts.join('/');
+          const result = await extractArchive({ archivePath: source.target, shareRoot: root, destinationPath });
+          return json(res, 201, { ok: true, name: path.basename(destinationPath), ...result });
         }
         if (route === '/api/network' && method === 'GET') {
           return json(res, 200, { host: '127.0.0.1', port: server.address()?.port, localOnly: true, interfaces: listNetworkInterfaces() });
@@ -655,6 +793,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     server.listen(port, host, () => { server.off('error', reject); resolve(); });
   });
 
+  const auditPurgeTimer = setInterval(purgeExpiredAuditLogs, 60 * 60 * 1000);
+  auditPurgeTimer.unref();
+
   let closed = false;
   return {
     host,
@@ -663,6 +804,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     close: () => new Promise((resolve, reject) => {
       if (closed) return resolve();
       closed = true;
+      clearInterval(auditPurgeTimer);
       server.close((error) => {
         db.close();
         if (error) return reject(error);

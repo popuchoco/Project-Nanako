@@ -155,11 +155,13 @@ function renderPermissionOptions() {
 }
 
 function showView(view) {
-  if (['users', 'system'].includes(view) && state.user.role !== 'admin') view = 'files';
+  if (['users', 'system', 'settings'].includes(view) && state.user.role !== 'admin') view = 'files';
+  const previousView = state.view;
   state.view = view;
+  if (previousView !== view) void api('/api/activity', { method: 'POST', body: JSON.stringify({ view }) }).catch(() => {});
   clearTimeout(state.systemRefreshTimer);
-  const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', network: '網路狀態' };
-  const icons = { files: '▤', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '⚙', network: '⌁' };
+  const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態' };
+  const icons = { files: '▤', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '▦', settings: '⚙', network: '⌁' };
   $('#page-title').textContent = names[view];
   $('#window-title').textContent = names[view];
   $('#window-app-icon').textContent = icons[view] || '▤';
@@ -177,6 +179,7 @@ function showView(view) {
   if (view === 'users') loadUsers();
   if (view === 'computer') loadComputer();
   if (view === 'system') loadSystem();
+  if (view === 'settings') { loadAuditSettings(); loadAuditLogs(); }
   if (view === 'network') loadNetwork();
 }
 
@@ -344,13 +347,35 @@ async function loadFiles() {
       const dateCell = document.createElement('td'); dateCell.textContent = formatDate(item.modifiedAt);
       const sizeCell = document.createElement('td'); sizeCell.textContent = item.isDirectory ? '資料夾' : formatSize(item.size);
       const actionCell = document.createElement('td');
-      if (canWrite) { const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-action danger'; remove.textContent = '移至回收桶'; remove.addEventListener('click', () => deleteItem(item.name)); actionCell.append(remove); }
+      if (canWrite) {
+        const actions = document.createElement('div'); actions.className = 'row-actions';
+        if (!item.name.toLocaleLowerCase('en-US').endsWith('.zip')) {
+          const compress = document.createElement('button'); compress.type = 'button'; compress.className = 'text-action'; compress.textContent = '壓縮 ZIP';
+          compress.addEventListener('click', () => runArchiveAction(item.name, 'create', compress)); actions.append(compress);
+        } else {
+          const extract = document.createElement('button'); extract.type = 'button'; extract.className = 'text-action'; extract.textContent = '解壓縮';
+          extract.addEventListener('click', () => runArchiveAction(item.name, 'extract', extract)); actions.append(extract);
+        }
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-action danger'; remove.textContent = '移至回收桶'; remove.addEventListener('click', () => deleteItem(item.name)); actions.append(remove);
+        actionCell.append(actions);
+      }
       row.append(nameCell, dateCell, sizeCell, actionCell); body.append(row);
     }
   } catch (error) { notify(error.message, true); }
 }
 
 function joinedPath(name) { return state.path ? `${state.path}/${name}` : name; }
+
+async function runArchiveAction(name, operation, button) {
+  const label = operation === 'create' ? '壓縮 ZIP' : '解壓縮';
+  button.disabled = true;
+  try {
+    const result = await api(`/api/archive/${operation}`, { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: joinedPath(name) }) });
+    notify(operation === 'create' ? `已建立「${result.name}」。` : `已解壓縮至「${result.name}」。`);
+    await loadFiles();
+  } catch (error) { notify(`${label}失敗：${error.message}`, true); }
+  finally { button.disabled = false; }
+}
 
 function openFile(item) {
   const kind = mediaKind(item.name);
@@ -417,6 +442,62 @@ async function loadUsers() {
     const { users } = await api('/api/users'); const body = $('#user-list'); body.replaceChildren();
     for (const user of users) { const row = document.createElement('div'); row.className = 'user-row'; const name = document.createElement('span'); name.textContent = user.username; const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role === 'admin' ? '管理員' : '使用者'; row.append(name, role); body.append(row); }
   } catch (error) { notify(error.message, true); }
+}
+
+async function loadAuditSettings() {
+  try {
+    const settings = await api('/api/audit-settings');
+    $('#audit-retention').value = String(settings.retentionDays);
+  } catch (error) { notify(error.message, true); }
+}
+
+async function loadAuditLogs() {
+  try {
+    const { logs, retentionDays } = await api('/api/audit-logs');
+    const body = $('#audit-log-list');
+    body.replaceChildren();
+    $('#audit-log-summary').textContent = `保留最近 ${retentionDays} 日的紀錄；畫面最多顯示最近 500 筆。`;
+    $('#empty-audit-logs').hidden = logs.length > 0;
+    for (const item of logs) {
+      const row = document.createElement('tr');
+      const time = document.createElement('td'); time.textContent = formatDate(item.occurredAt);
+      const actor = document.createElement('td'); actor.textContent = item.actorName;
+      const action = document.createElement('td'); action.textContent = item.action;
+      const target = document.createElement('td'); target.textContent = item.target || '—';
+      const outcome = document.createElement('td'); outcome.textContent = item.outcome;
+      outcome.className = item.outcome === '成功' ? 'audit-success' : 'audit-failure';
+      row.append(time, actor, action, target, outcome);
+      body.append(row);
+    }
+  } catch (error) { notify(error.message, true); }
+}
+
+async function saveAuditSettings(event) {
+  event.preventDefault();
+  const message = $('#audit-settings-message');
+  try {
+    const result = await api('/api/audit-settings', { method: 'POST', body: JSON.stringify({ retentionDays: Number($('#audit-retention').value) }) });
+    message.textContent = `已儲存，操作紀錄將保留 ${result.retentionDays} 日。`;
+    message.classList.remove('error'); message.hidden = false;
+    await loadAuditLogs();
+  } catch (error) {
+    message.textContent = error.message; message.classList.add('error'); message.hidden = false;
+  }
+}
+
+async function clearAllAuditLogs(event) {
+  event.preventDefault();
+  const phrase = $('#clear-audit-confirm').value;
+  if (phrase !== '刪除所有紀錄') return;
+  const button = $('#confirm-clear-audit'); button.disabled = true;
+  try {
+    await api('/api/audit-logs', { method: 'DELETE', body: JSON.stringify({ confirmText: phrase }) });
+    $('#clear-audit-dialog').close();
+    $('#clear-audit-confirm').value = '';
+    notify('已刪除所有使用者操作紀錄。');
+    await loadAuditLogs();
+  } catch (error) { notify(error.message, true); }
+  finally { button.disabled = $('#clear-audit-confirm').value !== '刪除所有紀錄'; }
 }
 
 async function loadAlbum() {
@@ -776,6 +857,12 @@ $('#media-test-track').addEventListener('change', () => {
 });
 $('#media-test-run').addEventListener('click', testSelectedMedia);
 $('#refresh-system').addEventListener('click', loadSystem);
+$('#audit-settings-form').addEventListener('submit', saveAuditSettings);
+$('#refresh-audit-logs').addEventListener('click', loadAuditLogs);
+$('#clear-audit-logs').addEventListener('click', () => { $('#clear-audit-confirm').value = ''; $('#confirm-clear-audit').disabled = true; $('#clear-audit-dialog').showModal(); $('#clear-audit-confirm').focus(); });
+$('#clear-audit-confirm').addEventListener('input', (event) => { $('#confirm-clear-audit').disabled = event.currentTarget.value !== '刪除所有紀錄'; });
+$('#clear-audit-form').addEventListener('submit', clearAllAuditLogs);
+$('#cancel-clear-audit').addEventListener('click', () => $('#clear-audit-dialog').close());
 
 start();
 
