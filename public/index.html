@@ -10,7 +10,7 @@
 <body>
   <main id="auth-screen" class="auth-screen" hidden>
     <section class="auth-panel">
-      <div class="brand-mark" aria-hidden="true">L</div>
+      <div class="brand-mark" aria-hidden="true">N</div>
       <p class="eyebrow">本機優先・不連雲端</p>
       <h1 id="auth-title">設定本機管理員</h1>
       <p id="auth-description" class="muted">建立只有這台電腦使用的管理員帳號。資料不會送到外部服務。</p>
@@ -30,16 +30,18 @@
       <div class="sidebar-label">管理</div>
       <nav aria-label="主要導覽">
         <button class="nav-item active" data-view="files"><span class="nav-glyph" aria-hidden="true">▤</span>檔案管理</button>
+        <button class="nav-item" data-view="album"><span class="nav-glyph" aria-hidden="true">▧</span>相簿</button>
+        <button class="nav-item" data-view="player"><span class="nav-glyph" aria-hidden="true">▶</span>播放器</button>
         <button class="nav-item" data-view="trash"><span class="nav-glyph" aria-hidden="true">⌫</span>資源回收桶</button>
         <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
         <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
       </nav>
-      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.1</span></div>
+      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.2</span></div>
     </aside>
 
     <section class="workspace">
       <header class="topbar">
-        <div><p class="eyebrow">Local-first storage</p><h1 id="page-title">檔案管理</h1></div>
+        <div><p class="eyebrow">本機優先儲存空間</p><h1 id="page-title">檔案管理</h1></div>
         <div class="account-tools"><span id="account-name" class="account-name"></span><button id="logout-button" class="button ghost" type="button">登出</button></div>
       </header>
 
@@ -48,6 +50,28 @@
         <div class="file-controls"><label class="field-inline">分享資料夾<select id="share-select" aria-label="選擇分享資料夾"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
         <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
         <p id="file-message" class="inline-message" role="status" hidden></p>
+      </section>
+
+      <section id="view-album" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>相簿</h2><p class="muted">瀏覽目前資料夾中的圖片；選取圖片可放大檢視。</p></div></div>
+        <div class="file-controls"><label class="field-inline">分享資料夾<select id="album-share-select" aria-label="選擇相簿分享資料夾"></select></label><div id="album-breadcrumb" class="breadcrumb" aria-label="相簿目前路徑"></div></div>
+        <div id="album-grid" class="album-grid" aria-label="圖片清單"></div>
+        <div id="empty-album" class="empty-state" hidden><strong>這個資料夾沒有圖片</strong><span>支援 JPG、PNG、GIF、WebP、AVIF 與 BMP。</span></div>
+      </section>
+
+      <section id="view-player" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>播放器</h2><p class="muted">播放目前資料夾中瀏覽器支援的音訊與影片格式。</p></div></div>
+        <div class="file-controls"><label class="field-inline">分享資料夾<select id="player-share-select" aria-label="選擇播放器分享資料夾"></select></label><div id="player-breadcrumb" class="breadcrumb" aria-label="播放器目前路徑"></div></div>
+        <div class="media-player-layout">
+          <section class="card player-stage" aria-label="媒體播放區">
+            <p id="current-media-name" class="current-media-name">尚未選取媒體</p>
+            <video id="video-player" controls playsinline preload="metadata" hidden></video>
+            <audio id="audio-player" controls preload="metadata" hidden></audio>
+            <p id="player-placeholder" class="player-placeholder">從右側清單選擇音訊或影片開始播放。</p>
+            <p id="player-message" class="inline-message" role="status" hidden></p>
+          </section>
+          <section class="card queue-card"><h3>播放清單</h3><div id="player-queue" class="player-queue"></div><div id="empty-player" class="empty-state" hidden><strong>沒有可播放的媒體</strong><span>支援 MP4、WebM、MP3、M4A、WAV、OGG、Opus 與 FLAC 等格式；實際播放能力依瀏覽器與編碼格式而異。</span></div></section>
+        </div>
       </section>
 
       <section id="view-trash" class="view-panel" hidden>
@@ -68,6 +92,10 @@
       <footer class="footer-note">資料儲存在本機。沒有 SSO、雲端同步或遙測。</footer>
     </section>
   </div>
+  <dialog id="photo-dialog" class="photo-dialog" aria-labelledby="photo-caption">
+    <div class="photo-dialog-toolbar"><button id="photo-prev" class="button secondary" type="button">上一張</button><button id="photo-close" class="button ghost" type="button">關閉</button><button id="photo-next" class="button secondary" type="button">下一張</button></div>
+    <figure><img id="photo-image" alt=""><figcaption id="photo-caption"></figcaption></figure>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="/app.js"></script>
 </body>

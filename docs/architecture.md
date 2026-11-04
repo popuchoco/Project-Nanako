@@ -19,7 +19,7 @@ Electron 主程序
           ▼
 Renderer（public/） ─── /api/* ───► HTTP 路由與驗證／授權
                                         ├─ Node.js 內建 SQLite
-                                        └─ 本機檔案系統
+                                        └─ 本機檔案系統（含 Range 媒體串流）
 ```
 
 - `electron/main.mjs`：桌面生命週期、視窗安全設定、啟停 HTTP 服務。
@@ -45,6 +45,7 @@ Electron 模式目前把資料放在 Electron 的 `userData/data`；命令列模
 - 密碼使用 Node.js `scrypt` 加上每位使用者的隨機 salt 雜湊。
 - 隨機工作階段權杖只以 SHA-256 雜湊值寫入 SQLite；瀏覽器 Cookie 設為 `HttpOnly`、`SameSite=Strict`。
 - 管理員可建立一般使用者，並對每個分享資料夾設定讀取／寫入權限。所有 API 檔案操作都在伺服器端檢查權限。
+- 圖片／音訊／影片透過受權限檢查的 `/api/preview` 提供；支援單一 byte range，以便瀏覽器 seek 影片或音訊。
 - Electron renderer 設定 `contextIsolation` 與 `sandbox`，停用 `nodeIntegration`，並拒絕外部視窗與非本機導覽。
 
 尚未實作登入節流、密碼重設、多因素驗證、使用者停用／刪除、稽核紀錄、API token 或遠端授權。不得將本原型的工作階段設計直接用於對外網路服務。

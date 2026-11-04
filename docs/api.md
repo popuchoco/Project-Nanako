@@ -23,6 +23,7 @@
 | `GET /api/files?shareId=…&path=…` | 是 | 需有該分享資料夾讀取權限；列出路徑下項目與 `canWrite`。 |
 | `POST /api/folders` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "name" }`。 |
 | `POST /api/upload?shareId=…&path=…&name=…` | 是 | 需有寫入權限；request body 為檔案內容，單檔上限 5 GiB。 |
+| `GET /api/preview?shareId=…&path=…` | 是 | 需有讀取權限；提供允許清單中的圖片／音訊／影片 MIME，支援單一 `Range: bytes=start-end` 請求（回傳 `206`）。 |
 | `GET /api/download?shareId=…&path=…` | 是 | 需有讀取權限；回傳檔案內容。 |
 | `DELETE /api/files?shareId=…&path=…` | 是 | 需有寫入權限；將項目移至資源回收桶，不能刪除分享根目錄。 |
 | `GET /api/trash?shareId=…` | 是 | 需有該分享資料夾寫入權限；列出待還原項目。 |
@@ -33,6 +34,8 @@
 | `GET /api/network` | 是 | 回報目前本機服務資訊與網路介面清單；不會啟用區域網路連線或改變網路設定。 |
 
 `path` 是分享資料夾內的相對路徑；不可使用絕對路徑或跳脫路徑。名稱須符合 Windows 檔名限制。實際狀態碼與回應內容以 `src/server.mjs` 和 `test/server.test.mjs` 為準。
+
+`/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。
 
 ## 外部整合 API 的後續設計
 

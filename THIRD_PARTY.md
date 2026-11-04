@@ -8,6 +8,7 @@
 | --- | --- | --- | --- | --- |
 | [Electron](https://github.com/electron/electron) | 45.2.2 | 桌面視窗、Chromium renderer 與 Node.js 主程序；本專案以 Electron 為基礎的延伸作品 | MIT；請以對應版本的 `LICENSE` 與正式發行套件所附授權檔為準 | `package.json` 已列為開發相依套件；尚未完成封裝，發行時預期會隨桌面程式提供 |
 | [Node.js](https://github.com/nodejs/node) | 需 Node.js 22.13 以上；Electron 內含其執行期 | 使用 `node:http`、`node:fs`、`node:sqlite`、`node:crypto` 等內建模組 | Node.js 專案授權採多重授權；以實際發行檔所附授權為準 | 開發測試使用本機 Node.js；Electron 發行檔會含其 Node.js 執行期及相依元件 |
+| [@electron/asar](https://github.com/electron/asar) | 4.3.1（一次性開發工具） | 僅用於檢視本機提供的 ASAR 封裝檔清單並擷取靜態資源，以了解功能範圍 | MIT | 僅透過 `npx` 用於開發檢視；未列入 `package.json`、未隨產品封裝 |
 
 目前沒有其他 npm 執行期套件；UI 使用原生 HTML、CSS 與 JavaScript。`node_modules`／鎖定檔尚未產生，因此正式打包前需產生並審查 npm lockfile、SBOM 與 Electron 相依授權清單。
 

@@ -66,6 +66,44 @@ test('users without an explicit share grant cannot read files', async (t) => {
   assert.equal(files.body.error, 'permission_denied');
 });
 
+test('media preview enforces permissions and serves byte ranges for playback', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie };
+  const uploadQuery = new URLSearchParams({ shareId, path: '', name: 'clip.mp4' });
+  const upload = await request(`/api/upload?${uploadQuery}`, { method: 'POST', headers: auth, body: Buffer.from('abcdef') });
+  assert.equal(upload.response.status, 201);
+
+  const previewQuery = new URLSearchParams({ shareId, path: 'clip.mp4' });
+  const partial = await request(`/api/preview?${previewQuery}`, { headers: { ...auth, Range: 'bytes=1-3' } });
+  assert.equal(partial.response.status, 206);
+  assert.equal(partial.response.headers.get('content-type'), 'video/mp4');
+  assert.equal(partial.response.headers.get('content-range'), 'bytes 1-3/6');
+  assert.equal(partial.response.headers.get('accept-ranges'), 'bytes');
+  assert.equal(partial.body, 'bcd');
+
+  const suffix = await request(`/api/preview?${previewQuery}`, { headers: { ...auth, Range: 'bytes=-2' } });
+  assert.equal(suffix.response.status, 206);
+  assert.equal(suffix.response.headers.get('content-range'), 'bytes 4-5/6');
+  assert.equal(suffix.body, 'ef');
+
+  const invalidRange = await request(`/api/preview?${previewQuery}`, { headers: { ...auth, Range: 'bytes=9-' } });
+  assert.equal(invalidRange.response.status, 416);
+  assert.equal(invalidRange.response.headers.get('content-range'), 'bytes */6');
+
+  const textUploadQuery = new URLSearchParams({ shareId, path: '', name: 'notes.txt' });
+  await request(`/api/upload?${textUploadQuery}`, { method: 'POST', headers: auth, body: Buffer.from('plain text') });
+  const unsupported = await request(`/api/preview?${new URLSearchParams({ shareId, path: 'notes.txt' })}`, { headers: auth });
+  assert.equal(unsupported.response.status, 415);
+
+  const addUser = await request('/api/users', { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'viewer', password: 'viewer-test-passphrase-2026', permissions: [] }) });
+  assert.equal(addUser.response.status, 201);
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'viewer', password: 'viewer-test-passphrase-2026' }) });
+  const viewerCookie = login.response.headers.get('set-cookie').split(';')[0];
+  const denied = await request(`/api/preview?${previewQuery}`, { headers: { Cookie: viewerCookie } });
+  assert.equal(denied.response.status, 403);
+});
+
 test('path traversal and LAN binding are rejected in this prototype', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();

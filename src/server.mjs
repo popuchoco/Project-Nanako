@@ -21,6 +21,15 @@ const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'], ['.svg', 'image/svg+xml'],
 ]);
+const mediaTypes = new Map([
+  ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'],
+  ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.avif', 'image/avif'], ['.bmp', 'image/bmp'],
+  ['.mp4', 'video/mp4'], ['.m4v', 'video/x-m4v'], ['.mov', 'video/quicktime'],
+  ['.webm', 'video/webm'], ['.ogv', 'video/ogg'],
+  ['.mp3', 'audio/mpeg'], ['.m4a', 'audio/mp4'], ['.aac', 'audio/aac'],
+  ['.wav', 'audio/wav'], ['.oga', 'audio/ogg'], ['.ogg', 'audio/ogg'],
+  ['.opus', 'audio/ogg'], ['.flac', 'audio/flac'],
+]);
 
 function json(res, status, data, headers = {}) {
   const body = Buffer.from(JSON.stringify(data));
@@ -331,6 +340,62 @@ export async function startServer({ dataDir, host = '127.0.0.1', port = 8765 } =
             throw error;
           }
           return json(res, 201, { ok: true, size });
+        }
+        if (route === '/api/preview' && method === 'GET') {
+          const shareId = url.searchParams.get('shareId') || '';
+          requirePermission(user, shareId);
+          const { root } = shareRoot(shareId);
+          const { target, parts } = resolveInside(root, url.searchParams.get('path') || '');
+          await rejectSymlinkTraversal(root, target);
+          const info = await stat(target).catch(() => null);
+          if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
+          const contentType = mediaTypes.get(path.extname(target).toLowerCase());
+          if (!contentType) throw fail(415, 'preview_not_supported', '目前不支援預覽或播放這個檔案格式，請下載查看。');
+
+          const rangeHeader = req.headers.range;
+          let range = null;
+          if (rangeHeader) {
+            const match = /^bytes=(\d*)-(\d*)$/iu.exec(rangeHeader.trim());
+            let start; let end;
+            if (match && info.size > 0) {
+              if (!match[1]) {
+                const suffixLength = Number(match[2]);
+                if (Number.isSafeInteger(suffixLength) && suffixLength > 0) {
+                  start = Math.max(info.size - suffixLength, 0);
+                  end = info.size - 1;
+                }
+              } else {
+                start = Number(match[1]);
+                end = match[2] ? Number(match[2]) : info.size - 1;
+                if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start && start < info.size) {
+                  end = Math.min(end, info.size - 1);
+                } else {
+                  start = undefined;
+                }
+              }
+            }
+            if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= info.size) {
+              return json(res, 416, { error: 'invalid_range', message: '無法讀取指定的檔案範圍。' }, {
+                'Accept-Ranges': 'bytes', 'Content-Range': `bytes */${info.size}`,
+              });
+            }
+            range = { start, end };
+          }
+
+          const fileName = parts.at(-1) || 'media';
+          const headers = {
+            'Content-Type': contentType,
+            'Content-Length': range ? range.end - range.start + 1 : info.size,
+            'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store',
+          };
+          if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${info.size}`;
+          res.writeHead(range ? 206 : 200, headers);
+          const stream = createReadStream(target, range || undefined);
+          stream.on('error', () => res.destroy());
+          stream.pipe(res);
+          return;
         }
         if (route === '/api/download' && method === 'GET') {
           const shareId = url.searchParams.get('shareId') || '';
