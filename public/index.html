@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Nanako｜本機檔案空間</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="auth-screen" class="auth-screen" hidden>
+    <section class="auth-panel">
+      <div class="brand-mark" aria-hidden="true">L</div>
+      <p class="eyebrow">本機優先・不連雲端</p>
+      <h1 id="auth-title">設定本機管理員</h1>
+      <p id="auth-description" class="muted">建立只有這台電腦使用的管理員帳號。資料不會送到外部服務。</p>
+      <form id="auth-form" class="form-stack">
+        <label>帳號<input id="auth-username" name="username" autocomplete="username" minlength="3" maxlength="32" required></label>
+        <label>密碼<input id="auth-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <button id="auth-submit" class="button primary" type="submit">建立管理員</button>
+      </form>
+      <p id="auth-error" class="form-error" role="alert" hidden></p>
+      <div class="privacy-note"><span class="status-dot"></span>服務目前只接受這台電腦的連線</div>
+    </section>
+  </main>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand-lockup"><div class="brand-mark small" aria-hidden="true">N</div><div><strong>Nanako</strong><span>本機檔案空間</span></div></div>
+      <div class="sidebar-label">管理</div>
+      <nav aria-label="主要導覽">
+        <button class="nav-item active" data-view="files"><span class="nav-glyph" aria-hidden="true">▤</span>檔案管理</button>
+        <button class="nav-item" data-view="trash"><span class="nav-glyph" aria-hidden="true">⌫</span>資源回收桶</button>
+        <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
+        <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
+      </nav>
+      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">原型版 0.1</span></div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div><p class="eyebrow">Local-first storage</p><h1 id="page-title">檔案管理</h1></div>
+        <div class="account-tools"><span id="account-name" class="account-name"></span><button id="logout-button" class="button ghost" type="button">登出</button></div>
+      </header>
+
+      <section id="view-files" class="view-panel">
+        <div class="content-heading"><div><h2>檔案</h2><p class="muted">管理本機分享資料夾內的檔案。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">上傳檔案<input id="file-input" type="file" multiple hidden></label></div></div>
+        <div class="file-controls"><label class="field-inline">分享資料夾<select id="share-select" aria-label="選擇分享資料夾"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
+        <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
+        <p id="file-message" class="inline-message" role="status" hidden></p>
+      </section>
+
+      <section id="view-trash" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>資源回收桶</h2><p class="muted">刪除的項目會先移到這裡，之後可以還原。</p></div></div>
+        <div class="file-controls"><label class="field-inline">分享資料夾<select id="trash-share-select" aria-label="選擇資源回收桶"></select></label></div>
+        <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">刪除時間</th><th scope="col">類型</th><th scope="col">操作</th></tr></thead><tbody id="trash-list"></tbody></table><div id="empty-trash" class="empty-state" hidden><strong>資源回收桶是空的</strong><span>刪除的項目會顯示在這裡。</span></div></div>
+      </section>
+
+      <section id="view-users" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>使用者與權限</h2><p class="muted">每個使用者都使用本機帳號；權限預設採拒絕。</p></div></div>
+        <div class="management-grid"><form id="user-form" class="card form-stack"><h3>新增使用者</h3><label>帳號<input name="username" autocomplete="off" minlength="3" maxlength="32" required></label><label>初始密碼<input name="password" type="password" minlength="12" maxlength="256" required></label><fieldset><legend>分享資料夾權限</legend><div id="permission-options" class="permission-options"></div></fieldset><button class="button primary" type="submit">建立使用者</button><p id="user-message" class="inline-message" role="status" hidden></p></form><section class="card"><h3>本機使用者</h3><div id="user-list" class="user-list"></div></section></div>
+      </section>
+
+      <section id="view-network" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">目前版本只接受本機連線，不會開放區域網路存取。</p></div></div>
+        <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機模式</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>區域網路分享尚未啟用</strong><p>網路介面卡選擇、連接埠設定與 TLS 憑證管理會在後續階段加入；本原型不會變更 Windows 防火牆或路由器設定。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
+      </section>
+      <footer class="footer-note">資料儲存在本機。沒有 SSO、雲端同步或遙測。</footer>
+    </section>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

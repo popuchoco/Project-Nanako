@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+out/
+coverage/
+/data/
+/files/
+/trash/
+*.tmp
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.DS_Store
+Thumbs.db
