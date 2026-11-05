@@ -4,6 +4,7 @@ const state = {
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
   selectedItems: new Set(), canWrite: false,
+  duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
   windowState: 'open', windowMaximized: false, windowRestoreRect: null, desktopClockTimer: null,
 };
 const mediaExtensions = {
@@ -37,7 +38,7 @@ function mediaUrl(shareId, filePath) {
 }
 
 function syncShareSelectors() {
-  for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select']) {
+  for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
     const element = $(selector);
     if (element) element.value = state.shareId;
   }
@@ -45,17 +46,26 @@ function syncShareSelectors() {
 
 function selectShare(shareId) {
   if (shareId === state.shareId) return;
+  if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
+    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+  }
+  clearTimeout(state.duplicatePollTimer);
   state.shareId = shareId;
   state.path = ''; state.albumPath = ''; state.playerPath = '';
   state.selectedItems.clear();
   state.currentItems = []; state.albumItems = []; state.albumImages = []; state.playerItems = [];
   state.pendingTrackPath = ''; state.activeTrackPath = '';
+  state.duplicateScanId = ''; state.duplicateScanStatus = ''; state.duplicateGroups = []; state.duplicateKeepers.clear();
+  $('#duplicate-results').hidden = true; $('#duplicate-empty').hidden = true; $('#duplicate-scan-progress').hidden = true;
+  $('#duplicate-open-trash').hidden = true;
   resetPlayer();
   syncShareSelectors();
   if (state.view === 'files') loadFiles();
   if (state.view === 'trash') loadTrash();
   if (state.view === 'album') loadAlbum();
   if (state.view === 'player') loadPlayer();
+  if (state.view === 'duplicates') loadDuplicates();
 }
 
 async function api(url, options = {}) {
@@ -130,7 +140,7 @@ async function loadShares() {
   const { shares } = await api('/api/shares');
   state.shares = shares;
   if (!state.shares.some((share) => share.id === state.shareId)) state.shareId = state.shares[0]?.id || '';
-  for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select']) {
+  for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
     const element = $(selector);
     element.replaceChildren(...state.shares.map((share) => {
       const option = document.createElement('option'); option.value = share.id; option.textContent = share.name; return option;
@@ -162,8 +172,8 @@ function showView(view) {
   state.view = view;
   if (previousView !== view) void api('/api/activity', { method: 'POST', body: JSON.stringify({ view }) }).catch(() => {});
   clearTimeout(state.systemRefreshTimer);
-  const names = { files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '我的電腦', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態' };
-  const icons = { files: '▤', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '▦', settings: '⚙', network: '⌁' };
+  const names = { files: '檔案管理', duplicates: '檔案去重', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '儲存空間', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態' };
+  const icons = { files: '▤', duplicates: '⧉', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '▦', settings: '⚙', network: '⌁' };
   $('#page-title').textContent = names[view];
   $('#window-title').textContent = names[view];
   $('#window-app-icon').textContent = icons[view] || '▤';
@@ -175,6 +185,7 @@ function showView(view) {
   dockApp.classList.toggle('active', state.windowState === 'open');
   document.querySelectorAll('.view-panel').forEach((panel) => { panel.hidden = panel.id !== `view-${view}`; });
   if (view === 'files') loadFiles();
+  if (view === 'duplicates') loadDuplicates();
   if (view === 'album') loadAlbum();
   if (view === 'player') { loadPlayer(); if (!state.mediaCompatibilityLoaded) loadMediaCompatibility(); }
   if (view === 'trash') loadTrash();
@@ -513,6 +524,260 @@ async function loadTrash() {
       row.append(name, date, type, actions); body.append(row);
     }
   } catch (error) { notify(error.message, true); }
+}
+
+function selectedDuplicateShare() {
+  return state.shares.find((share) => share.id === $('#duplicates-share-select').value) || null;
+}
+
+function setDuplicateMessage(message, isError = false) {
+  const element = $('#duplicate-scan-message');
+  element.textContent = message;
+  element.classList.toggle('error', isError);
+  element.hidden = !message;
+}
+
+function updateDuplicateSelection() {
+  const selected = state.duplicateGroups.filter((group) => state.duplicateKeepers.has(group.id));
+  const share = selectedDuplicateShare();
+  const copyCount = selected.reduce((total, group) => total + group.items.length - 1, 0);
+  const recoveredBytes = selected.reduce((total, group) => total + (group.items.length - 1) * group.size, 0);
+  const summary = $('#duplicate-selection-summary');
+  if (!share?.canWrite) summary.textContent = selected.length
+    ? `已選 ${selected.length} 組；這個資料空間是唯讀，無法整理副本。`
+    : '此資料空間為唯讀；可以掃描，但只有有寫入權限的使用者可整理副本。';
+  else if (!selected.length) summary.textContent = '選取每組要保留的檔案後，才會整理其餘副本。';
+  else summary.textContent = `已選 ${selected.length} 組，將移入回收桶 ${copyCount} 個副本，預估可回收 ${formatSize(recoveredBytes)}。`;
+  $('#duplicate-cleanup-button').disabled = !selected.length || !share?.canWrite;
+}
+
+function renderDuplicateGroups(groups) {
+  const container = $('#duplicate-groups');
+  container.replaceChildren();
+  state.duplicateGroups = groups;
+  state.duplicateKeepers.clear();
+  for (const [index, group] of groups.entries()) {
+    const card = document.createElement('article');
+    card.className = 'duplicate-group card';
+    const title = document.createElement('h4');
+    title.textContent = `第 ${index + 1} 組｜${formatSize(group.size)}｜${group.duplicateCount} 個相同內容檔案`;
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = `選一份保留；其他 ${group.duplicateCount - 1} 份會移至資源回收桶。`;
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'duplicate-keeper-options';
+    const legend = document.createElement('legend');
+    legend.textContent = '選擇要保留的檔案';
+    fieldset.append(legend);
+    for (const item of group.items) {
+      const label = document.createElement('label');
+      label.className = 'duplicate-file-option';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = `duplicate-keeper-${group.id}`;
+      radio.value = item.path;
+      radio.addEventListener('change', () => {
+        state.duplicateKeepers.set(group.id, item.path);
+        updateDuplicateSelection();
+      });
+      const details = document.createElement('span');
+      details.className = 'duplicate-file-details';
+      const filePath = document.createElement('strong');
+      filePath.textContent = item.path;
+      const modified = document.createElement('span');
+      modified.className = 'muted';
+      modified.textContent = `修改時間：${formatDate(item.modifiedAt)}`;
+      details.append(filePath, modified);
+      label.append(radio, details);
+      fieldset.append(label);
+    }
+    card.append(title, note, fieldset);
+    container.append(card);
+  }
+  updateDuplicateSelection();
+}
+
+function showDuplicateProgress(progress = {}) {
+  const area = $('#duplicate-scan-progress');
+  const meter = $('#duplicate-progress-meter');
+  area.hidden = false;
+  if (progress.phase === 'hashing' && progress.totalFiles > 0) {
+    meter.max = progress.totalFiles;
+    meter.value = Math.min(progress.comparedFiles || 0, progress.totalFiles);
+    $('#duplicate-scan-status').textContent = `已比對 ${progress.comparedFiles || 0}／${progress.totalFiles} 個候選檔案；已讀取 ${formatSize(progress.bytesHashed || 0)}。`;
+  } else {
+    meter.removeAttribute('value');
+    $('#duplicate-scan-status').textContent = `正在檢查 Nanako 資料空間中的項目（${progress.visitedEntries || 0} 個）…`;
+  }
+}
+
+function scheduleDuplicatePoll() {
+  clearTimeout(state.duplicatePollTimer);
+  state.duplicatePollTimer = setTimeout(() => { void pollDuplicateScan(); }, 400);
+}
+
+async function loadDuplicates() {
+  const share = selectedDuplicateShare();
+  const active = ['scanning', 'cancelling'].includes(state.duplicateScanStatus);
+  $('#duplicate-scan-start').disabled = !share || active;
+  $('#duplicates-share-select').disabled = !share || active;
+  $('#duplicate-scan-cancel').hidden = !active;
+  if (active && state.duplicateScanId) {
+    $('#duplicate-scan-progress').hidden = false;
+    void pollDuplicateScan();
+  }
+}
+
+async function startDuplicateScan() {
+  const share = selectedDuplicateShare();
+  if (!share) { setDuplicateMessage('目前沒有可讀取的 Nanako 資料空間。', true); return; }
+  clearTimeout(state.duplicatePollTimer);
+  state.duplicateScanId = '';
+  state.duplicateScanStatus = '';
+  state.duplicateGroups = [];
+  state.duplicateKeepers.clear();
+  $('#duplicate-open-trash').hidden = true;
+  $('#duplicate-results').hidden = true;
+  $('#duplicate-empty').hidden = true;
+  $('#duplicate-scan-progress').hidden = false;
+  $('#duplicate-scan-cancel').hidden = false;
+  $('#duplicate-scan-start').disabled = true;
+  $('#duplicates-share-select').disabled = true;
+  setDuplicateMessage('正在啟動掃描…');
+  showDuplicateProgress({ phase: 'starting' });
+  try {
+    const result = await api('/api/duplicates/scan', { method: 'POST', body: JSON.stringify({ shareId: share.id }) });
+    if (selectedDuplicateShare()?.id !== share.id) {
+      const query = new URLSearchParams({ scanId: result.scanId });
+      void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+      return;
+    }
+    state.duplicateScanId = result.scanId;
+    state.duplicateScanStatus = result.status;
+    setDuplicateMessage('掃描進行中；不會修改任何檔案。');
+    scheduleDuplicatePoll();
+  } catch (error) {
+    $('#duplicate-scan-progress').hidden = true;
+    $('#duplicate-scan-cancel').hidden = true;
+    $('#duplicate-scan-start').disabled = false;
+    $('#duplicates-share-select').disabled = false;
+    setDuplicateMessage(error.message, true);
+  }
+}
+
+async function pollDuplicateScan() {
+  if (!state.duplicateScanId) return;
+  try {
+    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    const result = await api(`/api/duplicates/scan?${query}`);
+    state.duplicateScanStatus = result.status;
+    if (['scanning', 'cancelling'].includes(result.status)) {
+      showDuplicateProgress(result.progress);
+      $('#duplicate-scan-start').disabled = true;
+      $('#duplicates-share-select').disabled = true;
+      $('#duplicate-scan-cancel').hidden = result.status === 'cancelling';
+      if (state.view === 'duplicates') scheduleDuplicatePoll();
+      return;
+    }
+    clearTimeout(state.duplicatePollTimer);
+    $('#duplicate-scan-progress').hidden = true;
+    $('#duplicate-scan-cancel').hidden = true;
+    $('#duplicate-scan-start').disabled = false;
+    $('#duplicates-share-select').disabled = false;
+    if (result.status === 'completed') {
+      const statistics = result.statistics || {};
+      const skipped = statistics.skippedFiles ? `，另有 ${statistics.skippedFiles} 個變動或無法讀取的項目已略過` : '';
+      setDuplicateMessage(`掃描完成：檢查 ${statistics.scannedFiles || 0} 個檔案${skipped}。`);
+      if (result.groups.length) {
+        $('#duplicate-empty').hidden = true;
+        $('#duplicate-results').hidden = false;
+        $('#duplicate-results-summary').textContent = `找到 ${result.groups.length} 組重複內容；整理前請逐組指定要保留的檔案。`;
+        renderDuplicateGroups(result.groups);
+      } else {
+        $('#duplicate-results').hidden = true;
+        $('#duplicate-empty').hidden = false;
+        state.duplicateGroups = [];
+      }
+    } else {
+      state.duplicateScanId = '';
+      state.duplicateScanStatus = result.status;
+      $('#duplicate-results').hidden = true;
+      $('#duplicate-empty').hidden = true;
+      setDuplicateMessage(result.status === 'cancelled' ? '掃描已取消；沒有檔案遭到變更。' : result.error || '掃描失敗。', result.status !== 'cancelled');
+    }
+  } catch (error) {
+    clearTimeout(state.duplicatePollTimer);
+    $('#duplicate-scan-progress').hidden = true;
+    $('#duplicate-scan-cancel').hidden = true;
+    $('#duplicate-scan-start').disabled = false;
+    $('#duplicates-share-select').disabled = false;
+    state.duplicateScanId = '';
+    state.duplicateScanStatus = '';
+    state.duplicateGroups = [];
+    state.duplicateKeepers.clear();
+    $('#duplicate-results').hidden = true;
+    $('#duplicate-empty').hidden = true;
+    setDuplicateMessage(error.message, true);
+  }
+}
+
+async function cancelDuplicateScan() {
+  if (!state.duplicateScanId) return;
+  $('#duplicate-scan-cancel').disabled = true;
+  try {
+    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    await api(`/api/duplicates/scan?${query}`, { method: 'DELETE' });
+    setDuplicateMessage('正在取消掃描…');
+    scheduleDuplicatePoll();
+  } catch (error) { setDuplicateMessage(error.message, true); }
+  finally { $('#duplicate-scan-cancel').disabled = false; }
+}
+
+function openDuplicateCleanupConfirmation() {
+  const selected = state.duplicateGroups.filter((group) => state.duplicateKeepers.has(group.id));
+  if (!selected.length || !selectedDuplicateShare()?.canWrite) return;
+  const count = selected.reduce((total, group) => total + group.items.length - 1, 0);
+  $('#duplicate-cleanup-description').textContent = `你已選擇保留 ${selected.length} 組中的指定檔案；將把 ${count} 個相同內容副本移至 Nanako 資源回收桶。之後仍可還原，並不會刪除你選擇保留的檔案。`;
+  $('#confirm-duplicate-cleanup').disabled = false;
+  $('#duplicate-cleanup-dialog').showModal();
+}
+
+async function cleanDuplicateFiles(event) {
+  event.preventDefault();
+  const selected = state.duplicateGroups.filter((group) => state.duplicateKeepers.has(group.id));
+  if (!selected.length || !state.duplicateScanId) return;
+  const button = $('#confirm-duplicate-cleanup');
+  button.disabled = true;
+  button.textContent = '整理中…';
+  try {
+    const result = await api('/api/duplicates/cleanup', {
+      method: 'POST',
+      body: JSON.stringify({
+        scanId: state.duplicateScanId,
+        groups: selected.map((group) => ({ groupId: group.id, keepPath: state.duplicateKeepers.get(group.id) })),
+      }),
+    });
+    $('#duplicate-cleanup-dialog').close();
+    const moved = result.moved?.length || 0;
+    const failures = result.failed?.length || 0;
+    state.duplicateScanId = '';
+    state.duplicateScanStatus = 'cleaned';
+    state.duplicateGroups = [];
+    state.duplicateKeepers.clear();
+    $('#duplicate-results').hidden = true;
+    $('#duplicate-empty').hidden = true;
+    $('#duplicate-open-trash').hidden = moved === 0;
+    setDuplicateMessage(failures
+      ? `已移入資源回收桶 ${moved} 個副本；${failures} 個項目未處理，請重新掃描後再確認。`
+      : `已將 ${moved} 個副本移至資源回收桶；保留的檔案未變更。`, failures > 0);
+  } catch (error) {
+    $('#duplicate-cleanup-dialog').close();
+    setDuplicateMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = '移至資源回收桶';
+    updateDuplicateSelection();
+  }
 }
 
 async function loadUsers() {
@@ -1018,7 +1283,13 @@ $('#auth-form').addEventListener('submit', async (event) => {
   catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
 });
 
-$('#logout-button').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); resetPlayer(); state.user = null; state.path = ''; showAuth(false); });
+$('#logout-button').addEventListener('click', async () => {
+  if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
+    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    await api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+  }
+  await api('/api/logout', { method: 'POST' }); resetPlayer(); state.user = null; state.path = ''; showAuth(false);
+});
 $('#change-password-button').addEventListener('click', () => {
   const form = $('#change-password-form'); form.reset();
   const message = $('#change-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
@@ -1039,7 +1310,7 @@ $('#change-password-form').addEventListener('submit', async (event) => {
   finally { submit.disabled = false; }
 });
 initializeDesktopInteractions();
-for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select']) {
+for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
 $('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
@@ -1074,6 +1345,12 @@ $('#clear-audit-logs').addEventListener('click', () => { $('#clear-audit-confirm
 $('#clear-audit-confirm').addEventListener('input', (event) => { $('#confirm-clear-audit').disabled = event.currentTarget.value !== '刪除所有紀錄'; });
 $('#clear-audit-form').addEventListener('submit', clearAllAuditLogs);
 $('#cancel-clear-audit').addEventListener('click', () => $('#clear-audit-dialog').close());
+$('#duplicate-scan-start').addEventListener('click', startDuplicateScan);
+$('#duplicate-scan-cancel').addEventListener('click', cancelDuplicateScan);
+$('#duplicate-cleanup-button').addEventListener('click', openDuplicateCleanupConfirmation);
+$('#duplicate-cleanup-form').addEventListener('submit', cleanDuplicateFiles);
+$('#cancel-duplicate-cleanup').addEventListener('click', () => $('#duplicate-cleanup-dialog').close());
+$('#duplicate-open-trash').addEventListener('click', () => showView('trash'));
 
 start();
 

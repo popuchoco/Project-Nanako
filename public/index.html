@@ -43,10 +43,11 @@
     <main id="desktop-area" class="desktop-area" aria-label="Nanako 桌面">
       <div class="desktop-shortcuts" aria-label="桌面捷徑">
         <button class="desktop-icon" data-open-view="files" type="button"><span class="desktop-icon-art folder-art" aria-hidden="true"><span></span></span><span>檔案管理</span></button>
-        <button class="desktop-icon" data-open-view="computer" type="button"><span class="desktop-icon-art computer-art" aria-hidden="true"><span></span></span><span>我的電腦</span></button>
+        <button class="desktop-icon" data-open-view="computer" type="button"><span class="desktop-icon-art computer-art" aria-hidden="true"><span></span></span><span>儲存空間</span></button>
         <button class="desktop-icon" data-open-view="trash" type="button"><span class="desktop-icon-art trash-art" aria-hidden="true">▤</span><span>資源回收桶</span></button>
         <button class="desktop-icon" data-open-view="album" type="button"><span class="desktop-icon-art album-art" aria-hidden="true"><span></span><i></i></span><span>相簿</span></button>
         <button class="desktop-icon" data-open-view="player" type="button"><span class="desktop-icon-art player-art" aria-hidden="true">▶</span><span>播放器</span></button>
+        <button class="desktop-icon" data-open-view="duplicates" type="button"><span class="desktop-icon-art duplicate-art" aria-hidden="true">⧉</span><span>檔案去重</span></button>
       </div>
 
       <section id="app-window" class="app-window" role="region" aria-labelledby="window-title" aria-label="Nanako 應用程式視窗">
@@ -63,11 +64,12 @@
       <div class="sidebar-label">應用程式</div>
       <nav aria-label="應用程式導覽">
         <button class="nav-item active" data-view="files"><span class="nav-glyph" aria-hidden="true">▤</span>檔案管理</button>
+        <button class="nav-item" data-view="duplicates"><span class="nav-glyph" aria-hidden="true">⧉</span>檔案去重</button>
         <button class="nav-item" data-view="album"><span class="nav-glyph" aria-hidden="true">▧</span>相簿</button>
         <button class="nav-item" data-view="player"><span class="nav-glyph" aria-hidden="true">▶</span>播放器</button>
         <button class="nav-item" data-view="trash"><span class="nav-glyph" aria-hidden="true">⌫</span>資源回收桶</button>
         <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
-        <button class="nav-item" data-view="computer"><span class="nav-glyph" aria-hidden="true">▣</span>我的電腦</button>
+        <button class="nav-item" data-view="computer"><span class="nav-glyph" aria-hidden="true">▣</span>儲存空間</button>
         <button class="nav-item admin-only" data-view="system"><span class="nav-glyph" aria-hidden="true">▦</span>電腦資訊</button>
         <button class="nav-item admin-only" data-view="settings"><span class="nav-glyph" aria-hidden="true">⚙</span>系統設定與紀錄</button>
         <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
@@ -87,6 +89,24 @@
         <div class="file-batch-toolbar" aria-label="批次檔案操作"><span id="selected-file-count" aria-live="polite">尚未選取項目</span><div class="toolbar"><button id="batch-move" class="button secondary" type="button" disabled>批次移動</button><button id="batch-copy" class="button secondary" type="button" disabled>批次複製</button><button id="batch-delete" class="button secondary danger-outline" type="button" disabled>批次移至回收桶</button></div></div>
         <div class="table-wrap"><table><thead><tr><th scope="col" class="file-select-column"><input id="select-all-files" type="checkbox" aria-label="選取目前資料夾的所有項目"></th><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
         <p id="file-message" class="inline-message" role="status" hidden></p>
+      </section>
+
+      <section id="view-duplicates" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>檔案去重</h2><p class="muted">找出 Nanako 資料空間內內容相同的檔案，確認後可將多餘副本移至資源回收桶。</p></div></div>
+        <div class="duplicate-scan-controls">
+          <label class="field-inline">Nanako 資料空間<select id="duplicates-share-select" aria-label="選擇要掃描的 Nanako 資料空間"></select></label>
+          <div class="toolbar"><button id="duplicate-scan-start" class="button primary" type="button">開始掃描</button><button id="duplicate-scan-cancel" class="button secondary" type="button" hidden>取消掃描</button></div>
+        </div>
+        <div class="notice duplicate-scope-note"><strong>掃描範圍固定於 NanakoData</strong><p>不會列出或掃描其他磁碟、Windows 資料夾或任意路徑。掃描只讀取檔案以比對內容，不會修改檔案；整理前會讓你逐組選擇保留項目並再次確認。</p></div>
+        <div id="duplicate-scan-progress" class="duplicate-progress" hidden><p id="duplicate-scan-status" role="status" aria-live="polite"></p><progress id="duplicate-progress-meter" max="100" value="0" aria-label="重複檔案掃描進度"></progress></div>
+        <p id="duplicate-scan-message" class="inline-message" role="status" aria-live="polite" hidden></p>
+        <button id="duplicate-open-trash" class="text-action duplicate-trash-link" type="button" hidden>查看資源回收桶</button>
+        <section id="duplicate-results" class="duplicate-results" aria-labelledby="duplicate-results-title" hidden>
+          <div class="content-heading"><div><h3 id="duplicate-results-title">掃描結果</h3><p id="duplicate-results-summary" class="muted"></p></div></div>
+          <div id="duplicate-groups" class="duplicate-groups"></div>
+          <div class="duplicate-cleanup-bar"><span id="duplicate-selection-summary" aria-live="polite">選取要保留的檔案後，才會整理其餘副本。</span><button id="duplicate-cleanup-button" class="button danger" type="button" disabled>整理所選群組</button></div>
+        </section>
+        <div id="duplicate-empty" class="empty-state" hidden><strong>沒有找到重複檔案</strong><span>這個 Nanako 資料空間目前沒有內容完全相同的檔案。</span></div>
       </section>
 
       <section id="view-album" class="view-panel" hidden>
@@ -135,7 +155,7 @@
       </section>
 
       <section id="view-computer" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>我的電腦</h2><p class="muted">Nanako 只管理可攜式執行檔所在目錄內的 NanakoData；不會瀏覽其他磁碟、Windows 已知資料夾或任意路徑。</p></div></div>
+        <div class="content-heading"><div><h2>儲存空間</h2><p class="muted">Nanako 只管理可攜式執行檔所在目錄內的 NanakoData；不會瀏覽其他磁碟、Windows 已知資料夾或任意路徑。</p></div></div>
         <section class="card computer-card"><h3>Nanako 可攜式資料空間</h3><p class="muted">檔案、相簿、影音播放器與資源回收桶都使用同一個受限資料範圍。匯入檔案會複製到這裡；檔案管理操作不會改動匯入來源。</p><div id="managed-storage-list" class="library-grid"></div><p id="managed-storage-empty" class="empty-state" hidden>目前沒有可存取的資料空間。</p></section>
       </section>
 
@@ -189,8 +209,9 @@
           <button data-open-view="files" type="button"><span class="launcher-icon folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
           <button data-open-view="album" type="button"><span class="launcher-icon album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>
           <button data-open-view="player" type="button"><span class="launcher-icon player-art" aria-hidden="true">▶</span>播放器</button>
+          <button data-open-view="duplicates" type="button"><span class="launcher-icon duplicate-art" aria-hidden="true">⧉</span>檔案去重</button>
           <button data-open-view="trash" type="button"><span class="launcher-icon trash-art" aria-hidden="true">▤</span>資源回收桶</button>
-          <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>我的電腦</button>
+          <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>儲存空間</button>
           <button class="admin-only" data-open-view="settings" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⚙</span>系統設定</button>
           <button class="admin-only" data-open-view="system" type="button"><span class="launcher-icon computer-art" aria-hidden="true">▦</span>電腦資訊</button>
         </div>
@@ -226,6 +247,13 @@
       <label for="clear-audit-confirm">請輸入「刪除所有紀錄」以確認</label>
       <input id="clear-audit-confirm" autocomplete="off" required>
       <div class="confirm-dialog-actions"><button id="cancel-clear-audit" class="button secondary" type="button">取消</button><button id="confirm-clear-audit" class="button danger" type="submit" disabled>刪除所有紀錄</button></div>
+    </form>
+  </dialog>
+  <dialog id="duplicate-cleanup-dialog" class="confirm-dialog" aria-labelledby="duplicate-cleanup-title">
+    <form id="duplicate-cleanup-form" method="dialog" class="confirm-dialog-content">
+      <h2 id="duplicate-cleanup-title">將重複檔案移至資源回收桶？</h2>
+      <p id="duplicate-cleanup-description">每組會保留你選取的檔案，其他相同內容的副本會移至 Nanako 資源回收桶；之後仍可還原。</p>
+      <div class="confirm-dialog-actions"><button id="cancel-duplicate-cleanup" class="button secondary" type="button">再檢查一下</button><button id="confirm-duplicate-cleanup" class="button danger" type="submit">移至資源回收桶</button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

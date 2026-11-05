@@ -43,6 +43,7 @@
 .album-art>span,.album-art>i{position:absolute;width:18px;height:18px;border-radius:50%;background:#42d8b7;left:10px;top:8px;box-shadow:12px 6px 0 #69b7fa,4px 17px 0 #ffd45c,-4px 10px 0 #d795f7}
 .album-art>i{transform:translate(7px,2px) scale(.7);background:#ff8298;opacity:.8}
 .player-art{width:45px;height:45px;margin-top:2px;border-radius:13px;background:linear-gradient(145deg,#54cdf4,#3287ed);color:white;font-size:17px;box-shadow:inset 0 0 0 2px rgba(255,255,255,.5)}
+.duplicate-art{width:45px;height:45px;margin-top:2px;border-radius:13px;background:linear-gradient(145deg,#78c5ee,#357bd5);color:white;font-size:18px;box-shadow:inset 0 0 0 2px rgba(255,255,255,.52)}
 .app-window{position:absolute;z-index:2;left:clamp(116px,18vw,264px);top:clamp(28px,7vh,62px);width:min(980px,calc(100% - 310px));height:min(690px,calc(100% - 112px));min-width:700px;min-height:440px;display:flex;flex-direction:column;border:1px solid rgba(231,240,246,.94);border-radius:14px;background:#f2f5fa;box-shadow:0 24px 62px rgba(1,27,47,.27),0 4px 16px rgba(10,42,61,.12);overflow:hidden;transition:box-shadow .16s ease}
 .app-window.is-maximized{left:8px!important;top:8px!important;width:calc(100% - 16px)!important;height:calc(100% - 70px)!important;border-radius:9px}
 .window-titlebar{height:44px;flex:none;display:flex;align-items:center;justify-content:center;padding:0 12px;position:relative;user-select:none;cursor:grab;color:#4b5967}
@@ -107,11 +108,12 @@
 .launcher-icon.computer-art{width:30px;height:24px;margin-top:4px;border-width:3px;border-radius:4px}
 .launcher-icon.computer-art::after{width:16px;bottom:-6px;height:3px}
 .launcher-icon.computer-art>span{width:11px;height:8px}
-.launcher-icon.trash-art,.launcher-icon.album-art,.launcher-icon.player-art,.launcher-icon.settings-art{width:32px;height:32px;margin:0;border-radius:8px}
+.launcher-icon.trash-art,.launcher-icon.album-art,.launcher-icon.player-art,.launcher-icon.duplicate-art,.launcher-icon.settings-art{width:32px;height:32px;margin:0;border-radius:8px}
 .launcher-icon.trash-art{font-size:15px}
 .launcher-icon.album-art>span,.launcher-icon.album-art>i{width:12px;height:12px;left:7px;top:5px;box-shadow:8px 4px 0 #69b7fa,3px 12px 0 #ffd45c,-3px 7px 0 #d795f7}
 .launcher-icon.album-art>i{transform:translate(5px,1px) scale(.7)}
 .launcher-icon.player-art{font-size:12px}
+.launcher-icon.duplicate-art{font-size:13px}
 .launcher-icon.settings-art{background:#dce8f1;color:#667e90;font-size:18px}
 .launcher-footer{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #dfe8ee;padding:11px 2px 1px;color:#7a8a97;font-size:9px}
 .launcher-footer span:first-child{display:flex;align-items:center;gap:6px;color:#4c6d68}
@@ -140,3 +142,36 @@
 .app-window .row-actions{flex-wrap:wrap;gap:2px}.app-window .text-action{font-size:10px;padding:4px}
 @media(max-width:650px){.file-batch-toolbar{align-items:flex-start;flex-direction:column}.file-batch-toolbar .toolbar{width:100%}.file-batch-toolbar .toolbar .button{flex:1;padding:0 6px}.row-actions{flex-wrap:wrap}.file-select-column{width:32px;padding-left:8px!important;padding-right:2px!important}td:last-child,th:last-child{width:150px}}
 .smb-preflight{max-width:760px;margin-top:18px}.smb-preflight .content-heading{margin-bottom:8px}.smb-status-grid{display:grid;grid-template-columns:minmax(160px,.8fr) minmax(0,1.2fr);gap:10px 16px;margin:12px 0 0}.smb-status-grid dt{font-size:12px;color:var(--muted)}.smb-status-grid dd{font-size:12px;margin:0;overflow-wrap:anywhere}
+
+/* 檔案去重工作流程 */
+.duplicate-scan-controls{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;padding:13px 14px;border:1px solid var(--line);border-radius:8px;background:#fbfcfd}
+.duplicate-scan-controls .field-inline{min-width:min(360px,100%)}
+.duplicate-scope-note{margin:12px 0;padding:12px 14px;border:1px solid #d7e5f1;border-radius:8px;background:#f4f8fc;color:#405566}
+.duplicate-scope-note strong{font-size:12px;color:#23435d}
+.duplicate-scope-note p{margin:5px 0 0;font-size:11px;line-height:1.65;color:#5c6e7b}
+.duplicate-progress{display:grid;gap:8px;margin:14px 0;padding:12px 14px;border:1px solid #d9e5ed;border-radius:8px;background:#f9fbfd}
+.duplicate-progress p{margin:0;font-size:11px;color:#405566}
+.duplicate-progress progress{width:100%;height:8px;accent-color:#2176c7}
+.duplicate-results{margin-top:18px}
+.duplicate-groups{display:grid;gap:12px}
+.duplicate-group{padding:14px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.duplicate-group h4{margin:0 0 5px;font-size:13px;color:#2d4050}
+.duplicate-group>p{margin:0 0 12px;font-size:11px}
+.duplicate-keeper-options{display:grid;gap:6px;margin:0;padding:10px;border:1px solid #e4e9ed;border-radius:7px}
+.duplicate-keeper-options legend{padding:0 5px;font-size:11px;font-weight:600;color:#526372}
+.duplicate-file-option{display:flex;align-items:flex-start;gap:9px;padding:9px;border:1px solid transparent;border-radius:6px;background:#f7f9fb;cursor:pointer}
+.duplicate-file-option:has(input:checked){border-color:#8dbce8;background:#f0f7fd}
+.duplicate-file-option input{flex:none;margin:2px 0 0;accent-color:#2176c7}
+.duplicate-file-details{display:grid;gap:4px;min-width:0}
+.duplicate-file-details strong{font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.duplicate-file-details .muted{font-size:10px}
+.duplicate-cleanup-bar{position:sticky;bottom:-18px;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px -25px -18px;padding:12px 25px;border-top:1px solid var(--line);background:rgba(255,255,255,.96);box-shadow:0 -5px 15px rgba(29,54,70,.04);backdrop-filter:blur(8px)}
+.duplicate-cleanup-bar>span{font-size:11px;color:var(--muted)}
+.duplicate-cleanup-bar .button{flex:none}
+.duplicate-trash-link{margin-top:8px}
+.app-window .duplicate-scan-controls{padding:10px 11px}
+.app-window .duplicate-scope-note{padding:10px 11px}
+.app-window .duplicate-progress{margin:11px 0;padding:10px 11px}
+.app-window .duplicate-group{padding:11px}
+.app-window .duplicate-cleanup-bar{bottom:-18px}
+@media(max-width:650px){.duplicate-scan-controls{align-items:stretch;flex-direction:column}.duplicate-scan-controls .field-inline{min-width:0;width:100%}.duplicate-scan-controls .toolbar{width:100%}.duplicate-cleanup-bar{align-items:stretch;flex-direction:column;margin-left:-12px;margin-right:-12px;padding:10px 12px}.duplicate-cleanup-bar .button{width:100%}.app-window .duplicate-cleanup-bar{bottom:-12px}}

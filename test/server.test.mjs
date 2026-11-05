@@ -117,6 +117,91 @@ test('rename, move, copy and batch-operation APIs stay inside NanakoData', async
   assert.equal(denied.response.status, 403);
 });
 
+test('duplicate scan is NanakoData-only and moves verified copies to the recycle bin', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie };
+  const upload = (name, contents) => request(`/api/upload?${new URLSearchParams({ shareId, path: '', name })}`, { method: 'POST', headers: auth, body: Buffer.from(contents) });
+  assert.equal((await upload('keeper.txt', 'same content')).response.status, 201);
+  assert.equal((await upload('copy.txt', 'same content')).response.status, 201);
+  assert.equal((await upload('same-size.txt', 'Same content')).response.status, 201);
+
+  const scan = await request('/api/duplicates/scan', {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ shareId }),
+  });
+  assert.equal(scan.response.status, 202);
+  let result;
+  const deadline = Date.now() + 5000;
+  do {
+    result = await request(`/api/duplicates/scan?${new URLSearchParams({ scanId: scan.body.scanId })}`, { headers: auth });
+    if (result.body.status !== 'scanning') break;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  } while (Date.now() < deadline);
+  assert.equal(result.body.status, 'completed');
+  assert.equal(result.body.groups.length, 1);
+  assert.equal(result.body.groups[0].duplicateCount, 2);
+  assert.deepEqual(result.body.groups[0].items.map((item) => item.path).sort(), ['copy.txt', 'keeper.txt']);
+
+  const maliciousSelection = await request('/api/duplicates/cleanup', {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scanId: scan.body.scanId, groups: [{ groupId: result.body.groups[0].id, keepPath: '../outside.txt' }] }),
+  });
+  assert.equal(maliciousSelection.response.status, 400);
+  const cleanup = await request('/api/duplicates/cleanup', {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scanId: scan.body.scanId, groups: [{ groupId: result.body.groups[0].id, keepPath: 'keeper.txt' }] }),
+  });
+  assert.equal(cleanup.response.status, 200);
+  assert.equal(cleanup.body.moved.length, 1);
+  assert.equal(cleanup.body.failed.length, 0);
+  assert.equal(await readFile(path.join(dataDir, 'files', shareId, 'keeper.txt'), 'utf8'), 'same content');
+  await assert.rejects(readFile(path.join(dataDir, 'files', shareId, 'copy.txt')));
+  const trash = await request(`/api/trash?shareId=${shareId}`, { headers: auth });
+  assert.equal(trash.body.items.some((item) => item.name === 'copy.txt'), true);
+  const restore = await request('/api/trash/restore', {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: cleanup.body.moved[0].trashId }),
+  });
+  assert.equal(restore.response.status, 200);
+  assert.equal(await readFile(path.join(dataDir, 'files', shareId, 'copy.txt'), 'utf8'), 'same content');
+});
+
+test('duplicate cleanup enforces per-user write access and does not accept unmanaged shares', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const admin = { Cookie: cookie };
+  for (const name of ['one.txt', 'two.txt']) {
+    await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name })}`, { method: 'POST', headers: admin, body: Buffer.from('duplicate') });
+  }
+  const created = await request('/api/users', {
+    method: 'POST', headers: { ...admin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'reader', password: 'reader-test-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }),
+  });
+  assert.equal(created.response.status, 201);
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'reader', password: 'reader-test-passphrase-2026' }) });
+  const reader = { Cookie: login.response.headers.get('set-cookie').split(';')[0] };
+  const scan = await request('/api/duplicates/scan', {
+    method: 'POST', headers: { ...reader, 'Content-Type': 'application/json' }, body: JSON.stringify({ shareId }),
+  });
+  assert.equal(scan.response.status, 202);
+  let result;
+  const deadline = Date.now() + 5000;
+  do {
+    result = await request(`/api/duplicates/scan?${new URLSearchParams({ scanId: scan.body.scanId })}`, { headers: reader });
+    if (result.body.status !== 'scanning') break;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  } while (Date.now() < deadline);
+  assert.equal(result.body.status, 'completed');
+  const denied = await request('/api/duplicates/cleanup', {
+    method: 'POST', headers: { ...reader, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scanId: scan.body.scanId, groups: [{ groupId: result.body.groups[0].id, keepPath: 'one.txt' }] }),
+  });
+  assert.equal(denied.response.status, 403);
+  const unmanaged = await request('/api/duplicates/scan', {
+    method: 'POST', headers: { ...admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ shareId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }),
+  });
+  assert.equal(unmanaged.response.status, 404);
+});
+
 test('users without an explicit share grant cannot read files', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie: adminCookie, shareId } = await setup();
