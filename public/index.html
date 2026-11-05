@@ -78,7 +78,7 @@
     <section class="workspace">
       <header class="topbar">
         <div><p class="eyebrow">本機優先儲存空間</p><h1 id="page-title">檔案管理</h1></div>
-        <div class="account-tools"><button id="logout-button" class="button ghost" type="button">登出</button></div>
+        <div class="account-tools"><button id="change-password-button" class="button ghost" type="button">變更密碼</button><button id="logout-button" class="button ghost" type="button">登出</button></div>
       </header>
 
       <section id="view-files" class="view-panel">
@@ -130,7 +130,7 @@
 
       <section id="view-users" class="view-panel" hidden>
         <div class="content-heading"><div><h2>使用者與權限</h2><p class="muted">每個使用者都使用本機帳號；權限預設採拒絕。</p></div></div>
-        <div class="management-grid"><form id="user-form" class="card form-stack"><h3>新增使用者</h3><label>帳號<input name="username" autocomplete="off" minlength="3" maxlength="32" required></label><label>初始密碼<input name="password" type="password" minlength="12" maxlength="256" required></label><fieldset><legend>分享資料夾權限</legend><div id="permission-options" class="permission-options"></div></fieldset><button class="button primary" type="submit">建立使用者</button><p id="user-message" class="inline-message" role="status" hidden></p></form><section class="card"><h3>本機使用者</h3><div id="user-list" class="user-list"></div></section></div>
+        <div class="management-grid"><form id="user-form" class="card form-stack"><h3>新增使用者</h3><label>帳號<input name="username" autocomplete="off" minlength="3" maxlength="32" required></label><label>初始密碼<input name="password" type="password" minlength="12" maxlength="256" required></label><fieldset><legend>資料空間權限</legend><div id="permission-options" class="permission-options"></div></fieldset><button class="button primary" type="submit">建立使用者</button><p id="user-message" class="inline-message" role="status" hidden></p></form><section class="card"><h3>本機使用者</h3><p class="muted">可調整一般使用者的資料空間權限，或停用帳號並立即撤銷其登入工作階段。</p><div id="user-list" class="user-list"></div></section></div>
       </section>
 
       <section id="view-computer" class="view-panel" hidden>
@@ -139,7 +139,7 @@
       </section>
 
       <section id="view-system" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>電腦資訊</h2><p class="muted">查看本機作業系統、處理器、記憶體、資料磁碟與網路介面概況。</p></div><button id="refresh-system" class="button secondary" type="button">重新整理</button></div>
+        <div class="content-heading"><div><h2>電腦資訊</h2><p class="muted">查看本機 Windows 身分與目前程序是否已提升至系統管理員權限，以及作業系統、處理器、記憶體、資料磁碟與網路介面概況。</p></div><button id="refresh-system" class="button secondary" type="button">重新整理</button></div>
         <div id="system-information" class="system-grid" aria-live="polite"><div class="card">讀取電腦資訊中…</div></div>
       </section>
 
@@ -195,6 +195,17 @@
   <dialog id="photo-dialog" class="photo-dialog" aria-labelledby="photo-caption">
     <div class="photo-dialog-toolbar"><button id="photo-prev" class="button secondary" type="button">上一張</button><button id="photo-close" class="button ghost" type="button">關閉</button><button id="photo-next" class="button secondary" type="button">下一張</button></div>
     <figure><img id="photo-image" alt=""><figcaption id="photo-caption"></figcaption></figure>
+  </dialog>
+  <dialog id="change-password-dialog" class="confirm-dialog" aria-labelledby="change-password-title">
+    <form id="change-password-form" class="confirm-dialog-content form-stack">
+      <h2 id="change-password-title">變更本機密碼</h2>
+      <p class="muted">密碼至少 12 個字元。變更後會撤銷其他登入工作階段。</p>
+      <label>目前密碼<input name="currentPassword" type="password" autocomplete="current-password" minlength="12" maxlength="256" required></label>
+      <label>新密碼<input name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+      <label>再次輸入新密碼<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+      <p id="change-password-message" class="inline-message" role="status" hidden></p>
+      <div class="confirm-dialog-actions"><button id="cancel-change-password" class="button secondary" type="button">取消</button><button class="button primary" type="submit">更新密碼</button></div>
+    </form>
   </dialog>
   <dialog id="clear-audit-dialog" class="confirm-dialog" aria-labelledby="clear-audit-title">
     <form id="clear-audit-form" method="dialog" class="confirm-dialog-content">

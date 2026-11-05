@@ -440,7 +440,54 @@ async function loadTrash() {
 async function loadUsers() {
   try {
     const { users } = await api('/api/users'); const body = $('#user-list'); body.replaceChildren();
-    for (const user of users) { const row = document.createElement('div'); row.className = 'user-row'; const name = document.createElement('span'); name.textContent = user.username; const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role === 'admin' ? '管理員' : '使用者'; row.append(name, role); body.append(row); }
+    for (const user of users) {
+      const row = document.createElement('article'); row.className = 'user-card';
+      const heading = document.createElement('div'); heading.className = 'user-row';
+      const name = document.createElement('strong'); name.textContent = user.username;
+      const badges = document.createElement('div'); badges.className = 'user-badges';
+      const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role === 'admin' ? '管理員' : '使用者';
+      const status = document.createElement('span'); status.className = `user-role${user.isActive ? '' : ' user-disabled'}`; status.textContent = user.isActive ? '啟用中' : '已停用';
+      badges.append(role, status); heading.append(name, badges); row.append(heading);
+      if (user.role === 'user') {
+        const details = document.createElement('details'); details.className = 'user-permission-details';
+        const summary = document.createElement('summary'); summary.textContent = '權限與帳號狀態'; details.append(summary);
+        const form = document.createElement('form'); form.className = 'form-stack user-permission-form';
+        const fieldset = document.createElement('fieldset'); const legend = document.createElement('legend'); legend.textContent = '資料空間權限'; fieldset.append(legend);
+        for (const share of state.shares) {
+          const current = user.permissions?.find((permission) => permission.shareId === share.id);
+          const permissionRow = document.createElement('label'); permissionRow.className = 'permission-row';
+          const read = document.createElement('input'); read.type = 'checkbox'; read.name = `read-${share.id}`; read.checked = Boolean(current?.canRead);
+          const write = document.createElement('input'); write.type = 'checkbox'; write.name = `write-${share.id}`; write.checked = Boolean(current?.canWrite);
+          read.addEventListener('change', () => { if (!read.checked) write.checked = false; });
+          write.addEventListener('change', () => { if (write.checked) read.checked = true; });
+          permissionRow.append(read, document.createTextNode(`${share.name}：讀取`), write, document.createTextNode('寫入')); fieldset.append(permissionRow);
+        }
+        const activeLabel = document.createElement('label'); activeLabel.className = 'account-active-toggle';
+        const active = document.createElement('input'); active.type = 'checkbox'; active.name = 'isActive'; active.checked = Boolean(user.isActive);
+        activeLabel.append(active, document.createTextNode('允許此帳號登入'));
+        const save = document.createElement('button'); save.type = 'submit'; save.className = 'button primary'; save.textContent = '儲存變更';
+        const message = document.createElement('p'); message.className = 'inline-message'; message.hidden = true; message.setAttribute('role', 'status');
+        form.append(fieldset, activeLabel, save, message);
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const permissions = state.shares.flatMap((share) => {
+            const canRead = form.elements[`read-${share.id}`].checked;
+            const canWrite = form.elements[`write-${share.id}`].checked;
+            return canRead ? [{ shareId: share.id, canRead, canWrite }] : [];
+          });
+          save.disabled = true;
+          try {
+            await api(`/api/users/${encodeURIComponent(user.id)}`, { method: 'PATCH', body: JSON.stringify({ isActive: active.checked, permissions }) });
+            notify('使用者權限已更新。');
+            await loadUsers();
+          } catch (error) {
+            message.textContent = error.message; message.classList.add('error'); message.hidden = false;
+          } finally { save.disabled = false; }
+        });
+        details.append(form); row.append(details);
+      }
+      body.append(row);
+    }
   } catch (error) { notify(error.message, true); }
 }
 
@@ -791,6 +838,18 @@ async function loadSystem() {
     addSystemFact(deviceFacts, '處理器', info.processor);
     device.append(deviceFacts);
 
+    const execution = makeSystemCard('Windows 權限狀態');
+    const executionFacts = document.createElement('dl'); executionFacts.className = 'system-facts';
+    const windowsExecution = info.windowsExecution || {};
+    addSystemFact(executionFacts, '目前 Windows 身分', windowsExecution.identity || '無法判定');
+    addSystemFact(executionFacts, '系統管理員群組', windowsExecution.checked ? (windowsExecution.isAdministrator ? '是' : '否') : '無法判定');
+    addSystemFact(executionFacts, '目前程序權限', !windowsExecution.supported ? '非 Windows 環境' : windowsExecution.checked ? (windowsExecution.isElevated ? '已提升（高完整性）' : '未提升') : '無法判定');
+    const executionNote = document.createElement('p'); executionNote.className = 'muted';
+    executionNote.textContent = windowsExecution.isElevated
+      ? 'Nanako 目前以 Windows 提升權限執行。'
+      : 'Nanako 目前尚未以 Windows 提升權限執行；此狀態不同於 Nanako 內的管理員帳號。';
+    execution.append(executionFacts, executionNote);
+
     const memory = makeSystemCard('記憶體');
     const memoryFacts = document.createElement('dl'); memoryFacts.className = 'system-facts';
     addSystemFact(memoryFacts, '已使用', `${formatSize(info.memory.usedBytes)}／${formatSize(info.memory.totalBytes)}`);
@@ -819,7 +878,7 @@ async function loadSystem() {
     }
     if (!info.networkInterfaces.length) interfaces.textContent = '目前沒有啟用中的網路介面。';
     network.append(interfaces);
-    container.append(device, memory, cpu, storage, network);
+    container.append(device, execution, memory, cpu, storage, network);
     if (state.view === 'system') state.systemRefreshTimer = setTimeout(loadSystem, 5000);
   } catch (error) {
     const container = $('#system-information'); container.replaceChildren();
@@ -835,6 +894,25 @@ $('#auth-form').addEventListener('submit', async (event) => {
 });
 
 $('#logout-button').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); resetPlayer(); state.user = null; state.path = ''; showAuth(false); });
+$('#change-password-button').addEventListener('click', () => {
+  const form = $('#change-password-form'); form.reset();
+  const message = $('#change-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
+  $('#change-password-dialog').showModal(); form.elements.currentPassword.focus();
+});
+$('#cancel-change-password').addEventListener('click', () => $('#change-password-dialog').close());
+$('#change-password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const message = $('#change-password-message');
+  if (values.get('newPassword') !== values.get('confirmPassword')) {
+    message.textContent = '兩次輸入的新密碼不一致。'; message.classList.add('error'); message.hidden = false; return;
+  }
+  const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+  try {
+    await api('/api/password', { method: 'POST', body: JSON.stringify({ currentPassword: values.get('currentPassword'), newPassword: values.get('newPassword') }) });
+    $('#change-password-dialog').close(); form.reset(); notify('密碼已更新，其他登入工作階段已撤銷。');
+  } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
+  finally { submit.disabled = false; }
+});
 initializeDesktopInteractions();
 for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select']) {
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));

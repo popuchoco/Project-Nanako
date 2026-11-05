@@ -176,6 +176,14 @@ test('system information is restricted to the local administrator', async (t) =>
   assert.equal(adminInfo.response.status, 200);
   assert.ok(adminInfo.body.computerName);
   assert.ok(adminInfo.body.memory.totalBytes > 0);
+  assert.equal(typeof adminInfo.body.windowsExecution.supported, 'boolean');
+  assert.equal(typeof adminInfo.body.windowsExecution.isAdministrator, 'boolean');
+  assert.equal(typeof adminInfo.body.windowsExecution.isElevated, 'boolean');
+  if (process.platform === 'win32') {
+    assert.equal(adminInfo.body.windowsExecution.supported, true);
+    assert.equal(adminInfo.body.windowsExecution.checked, true);
+    assert.ok(adminInfo.body.windowsExecution.identity);
+  }
   const addUser = await request('/api/users', { method: 'POST', headers: { Cookie: adminCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'sys-viewer', password: 'system-viewer-passphrase-2026', permissions: [] }) });
   assert.equal(addUser.response.status, 201);
   const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'sys-viewer', password: 'system-viewer-passphrase-2026' }) });
@@ -288,4 +296,80 @@ test('directory ZIP archives preserve nested files and empty directories', async
   assert.equal(nested.body, 'nested archive item');
   const listing = await request(`/api/files?${new URLSearchParams({ shareId, path: 'collection' })}`, { headers: { Cookie: cookie } });
   assert.ok(listing.body.items.some((item) => item.name === 'empty' && item.isDirectory));
+});
+
+test('administrators can update share grants and deactivate accounts', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie: adminCookie, shareId, user: adminUser } = await setup();
+  const adminAuth = { Cookie: adminCookie, 'Content-Type': 'application/json' };
+  const created = await request('/api/users', {
+    method: 'POST', headers: adminAuth,
+    body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: true }] }),
+  });
+  assert.equal(created.response.status, 201);
+  const userId = created.body.user.id;
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
+  assert.equal(login.response.status, 200);
+  const userCookie = login.response.headers.get('set-cookie').split(';')[0];
+  assert.equal((await request('/api/shares', { headers: { Cookie: userCookie } })).body.shares.length, 1);
+
+  const revoked = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: true, permissions: [] }) });
+  assert.equal(revoked.response.status, 200);
+  const denied = await request('/api/shares', { headers: { Cookie: userCookie } });
+  assert.equal(denied.response.status, 200);
+  assert.deepEqual(denied.body.shares, []);
+
+  const deactivated = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: false, permissions: [{ shareId, canRead: true, canWrite: false }] }) });
+  assert.equal(deactivated.response.status, 200);
+  assert.equal((await request('/api/me', { headers: { Cookie: userCookie } })).response.status, 401);
+  const blockedLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
+  assert.equal(blockedLogin.response.status, 401);
+
+  const reactivated = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: true, permissions: [{ shareId, canRead: true, canWrite: false }] }) });
+  assert.equal(reactivated.response.status, 200);
+  assert.equal(reactivated.body.user.isActive, 1);
+  assert.equal(reactivated.body.user.permissions[0].canRead, true);
+  assert.equal(reactivated.body.user.permissions[0].canWrite, false);
+  const refreshedLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
+  assert.equal(refreshedLogin.response.status, 200);
+
+  const selfEdit = await request(`/api/users/${adminUser.id}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: false, permissions: [] }) });
+  assert.equal(selfEdit.response.status, 400);
+  const history = await request('/api/audit-logs', { headers: { Cookie: adminCookie } });
+  assert.ok(history.body.logs.filter((item) => item.action === '更新使用者權限').length >= 3);
+});
+
+test('users can change their own password and other sessions are revoked', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie: originalCookie } = await setup();
+  const secondLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
+  const secondCookie = secondLogin.response.headers.get('set-cookie').split(';')[0];
+  const changed = await request('/api/password', {
+    method: 'POST', headers: { Cookie: originalCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'local-test-passphrase-2026', newPassword: 'admin-new-passphrase-2026' }),
+  });
+  assert.equal(changed.response.status, 200);
+  const renewedCookie = changed.response.headers.get('set-cookie').split(';')[0];
+  assert.equal((await request('/api/me', { headers: { Cookie: originalCookie } })).response.status, 401);
+  assert.equal((await request('/api/me', { headers: { Cookie: secondCookie } })).response.status, 401);
+  assert.equal((await request('/api/me', { headers: { Cookie: renewedCookie } })).response.status, 200);
+  const oldPassword = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
+  assert.equal(oldPassword.response.status, 401);
+  const newPassword = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin-new-passphrase-2026' }) });
+  assert.equal(newPassword.response.status, 200);
+  const history = await request('/api/audit-logs', { headers: { Cookie: renewedCookie } });
+  assert.ok(history.body.logs.some((item) => item.action === '變更密碼'));
+  assert.equal(JSON.stringify(history.body).includes('admin-new-passphrase-2026'), false);
+});
+
+test('repeated failed local logins are temporarily throttled', async (t) => {
+  const { request, setup } = await setupServer(t);
+  await setup();
+  for (let index = 0; index < 5; index += 1) {
+    const failed = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: `wrong-passphrase-${index}-2026` }) });
+    assert.equal(failed.response.status, 401);
+  }
+  const limited = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
+  assert.equal(limited.response.status, 429);
+  assert.equal(limited.body.error, 'login_throttled');
 });

@@ -21,6 +21,8 @@ const MAX_JSON_BYTES = 64 * 1024;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 const AUDIT_RETENTION_OPTIONS = Object.freeze([1, 3, 7, 30, 90, 180, 365]);
 const DEFAULT_AUDIT_RETENTION_DAYS = 30;
+const LOGIN_FAILURE_LIMIT = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
@@ -175,7 +177,8 @@ function initDatabase(dataDir) {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_salt TEXT NOT NULL, password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('admin','user')), created_at TEXT NOT NULL
+      role TEXT NOT NULL CHECK(role IN ('admin','user')), created_at TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
     );
     CREATE TABLE IF NOT EXISTS shares (
       id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
@@ -206,6 +209,8 @@ function initDatabase(dataDir) {
     );
     CREATE INDEX IF NOT EXISTS operation_logs_occurred_at_idx ON operation_logs(occurred_at DESC);
   `);
+  const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+  if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
   db.prepare('INSERT OR IGNORE INTO app_settings(setting_key, setting_value) VALUES(?, ?)')
     .run('audit_retention_days', String(DEFAULT_AUDIT_RETENTION_DAYS));
   const shareColumns = new Set(db.prepare('PRAGMA table_info(shares)').all().map((column) => column.name));
@@ -244,6 +249,37 @@ function listNetworkInterfaces() {
 }
 
 let lastCpuSample;
+let windowsExecutionCache;
+let windowsExecutionCacheAt = 0;
+
+async function collectWindowsExecutionState() {
+  if (process.platform !== 'win32') {
+    return { supported: false, checked: false, identity: null, isAdministrator: false, isElevated: false, message: '僅支援在 Windows 上檢查。' };
+  }
+  if (windowsExecutionCache && Date.now() - windowsExecutionCacheAt < 60_000) return windowsExecutionCache;
+  const fallback = { supported: true, checked: false, identity: os.userInfo().username, isAdministrator: false, isElevated: false, message: '無法讀取目前 Windows 權限狀態。' };
+  try {
+    const [groupsResult, identityResult] = await Promise.all([
+      execFileAsync('whoami.exe', ['/groups', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 }),
+      execFileAsync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: 5000, maxBuffer: 16 * 1024 }),
+    ]);
+    const groups = groupsResult.stdout || '';
+    const identity = /^"([^"]+)"/mu.exec(identityResult.stdout || '')?.[1] || os.userInfo().username;
+    windowsExecutionCache = {
+      supported: true,
+      checked: true,
+      identity,
+      isAdministrator: /S-1-5-32-544\b/u.test(groups),
+      isElevated: /S-1-16-(?:12288|16384)\b/u.test(groups),
+      message: null,
+    };
+  } catch {
+    windowsExecutionCache = fallback;
+  }
+  windowsExecutionCacheAt = Date.now();
+  return windowsExecutionCache;
+}
+
 function sampleCpuUsage(cpus = os.cpus()) {
   const totals = cpus.reduce((summary, cpu) => {
     const values = Object.values(cpu.times);
@@ -291,6 +327,7 @@ async function collectSystemInformation(dataDir) {
     memory: { totalBytes: memoryTotal, availableBytes: memoryFree, usedBytes: memoryTotal - memoryFree, usagePercent: Math.round((1 - memoryFree / memoryTotal) * 100) },
     storage: { totalBytes: storageTotal, freeBytes: storageFree, usedBytes: Math.max(0, storageTotal - storageFree) },
     networkInterfaces: listNetworkInterfaces(),
+    windowsExecution: await collectWindowsExecutionState(),
   };
 }
 
@@ -324,6 +361,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
   }
   const db = initDatabase(dataDir);
+  const loginFailures = new Map();
+  const dummyPassword = await passwordHash('Nanako non-existent account timing check');
   const readAuditRetentionDays = () => {
     const raw = db.prepare("SELECT setting_value FROM app_settings WHERE setting_key = 'audit_retention_days'").get()?.setting_value;
     const days = Number(raw);
@@ -347,6 +386,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'POST' && route === '/api/trash/restore') return { action: '還原資源回收桶項目', target: '資源回收桶項目' };
     if (method === 'DELETE' && route === '/api/trash') return { action: '永久刪除資源回收桶項目', target: '資源回收桶項目' };
     if (method === 'POST' && route === '/api/users') return { action: '建立使用者', target: '使用者帳號' };
+    if (method === 'PATCH' && /^\/api\/users\/[0-9a-f-]{36}$/iu.test(route)) return { action: '更新使用者權限', target: '使用者帳號' };
+    if (method === 'POST' && route === '/api/password') return { action: '變更密碼', target: '本機帳號' };
     if (method === 'GET' && route === '/api/users') return { action: '檢視使用者清單', target: '使用者與權限' };
     if (method === 'POST' && route === '/api/archive/create') return { action: '建立 ZIP 壓縮檔', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/archive/extract') return { action: '解壓縮 ZIP 檔案', target: target(url.searchParams.get('path')) };
@@ -356,7 +397,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
 
   const findUser = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE');
-  const getUserById = db.prepare('SELECT id, username, role, created_at FROM users WHERE id = ?');
+  const getUserById = db.prepare('SELECT id, username, role, created_at, is_active AS isActive FROM users WHERE id = ?');
   const findShare = db.prepare('SELECT * FROM shares WHERE id = ?');
   const getPerm = db.prepare(`SELECT can_read, can_write FROM share_permissions WHERE user_id = ? AND share_id = ?`);
   const allShares = db.prepare("SELECT id, name, created_at, storage_path, source_type FROM shares WHERE source_type = 'managed' AND storage_path IS NULL ORDER BY name COLLATE NOCASE");
@@ -388,7 +429,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (!token || token.length > 200) return null;
     const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?').get(hashToken(token));
     if (!row || row.expires_at < Date.now()) return null;
-    return getUserById.get(row.user_id) || null;
+    const user = getUserById.get(row.user_id) || null;
+    return user?.isActive ? user : null;
   }
 
   const server = createServer(async (req, res) => {
@@ -447,9 +489,33 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const body = await readJson(req);
           const attemptedUsername = String(body.username || '').slice(0, 80);
           setAudit({ username: attemptedUsername || '未知使用者' }, '登入', attemptedUsername);
+          const accountKey = attemptedUsername.trim().toLocaleLowerCase('en-US');
+          const sourceKey = req.socket.remoteAddress || 'local';
+          const throttleKey = `${sourceKey}\0${accountKey}`;
+          const now = Date.now();
+          if (loginFailures.size > 2048) {
+            for (const [key, value] of loginFailures) {
+              if (now - value.windowStartedAt >= LOGIN_WINDOW_MS) loginFailures.delete(key);
+            }
+          }
+          let attempt = loginFailures.get(throttleKey);
+          if (attempt && now - attempt.windowStartedAt >= LOGIN_WINDOW_MS) {
+            loginFailures.delete(throttleKey);
+            attempt = null;
+          }
+          if (attempt?.lockedUntil > now) throw fail(429, 'login_throttled', '登入嘗試次數過多，請 15 分鐘後再試。');
           const user = findUser.get(String(body.username || ''));
-          const valid = user && await verifyPassword(String(body.password || ''), user.password_salt, user.password_hash);
-          if (!valid) throw fail(401, 'invalid_login', '帳號或密碼不正確。');
+          const password = String(body.password || '');
+          const validPassword = password.length <= 256
+            && await verifyPassword(password, user?.password_salt || dummyPassword.salt, user?.password_hash || dummyPassword.hash);
+          if (!user || !user.is_active || !validPassword) {
+            const next = attempt || { count: 0, windowStartedAt: now, lockedUntil: 0 };
+            next.count += 1;
+            if (next.count >= LOGIN_FAILURE_LIMIT) next.lockedUntil = now + LOGIN_WINDOW_MS;
+            loginFailures.set(throttleKey, next);
+            throw fail(401, 'invalid_login', '帳號或密碼不正確。');
+          }
+          loginFailures.delete(throttleKey);
           setAudit(user, '登入', user.username);
           const token = crypto.randomBytes(32).toString('base64url');
           db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
@@ -481,6 +547,19 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         }
 
         if (route === '/api/me' && method === 'GET') return json(res, 200, { user });
+        if (route === '/api/password' && method === 'POST') {
+          const body = await readJson(req);
+          const current = db.prepare('SELECT password_salt, password_hash FROM users WHERE id = ?').get(user.id);
+          if (!await verifyPassword(String(body.currentPassword || ''), current.password_salt, current.password_hash)) {
+            throw fail(400, 'current_password_incorrect', '目前密碼不正確。');
+          }
+          const nextPassword = await passwordHash(body.newPassword);
+          db.prepare('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?').run(nextPassword.salt, nextPassword.hash, user.id);
+          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+          const token = crypto.randomBytes(32).toString('base64url');
+          db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
+          return json(res, 200, { ok: true }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
+        }
         if (route === '/api/shares' && method === 'GET') {
           const shares = allShares.all().filter((share) => permission(user, share.id).can_read).map((share) => ({
             id: share.id,
@@ -687,7 +766,13 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         }
         if (route === '/api/users' && method === 'GET') {
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
-          const users = db.prepare('SELECT id, username, role, created_at AS createdAt FROM users ORDER BY username COLLATE NOCASE').all();
+          const users = db.prepare('SELECT id, username, role, created_at AS createdAt, is_active AS isActive FROM users ORDER BY username COLLATE NOCASE').all();
+          for (const listedUser of users) {
+            listedUser.permissions = allShares.all().map((share) => {
+              const grant = getPerm.get(listedUser.id, share.id) || { can_read: 0, can_write: 0 };
+              return { shareId: share.id, canRead: Boolean(grant.can_read), canWrite: Boolean(grant.can_write) };
+            });
+          }
           return json(res, 200, { users });
         }
         if (route === '/api/users' && method === 'POST') {
@@ -709,6 +794,39 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             grant.run(userId, item.shareId, Number(canRead), Number(canWrite));
           }
           return json(res, 201, { user: getUserById.get(userId) });
+        }
+        if (route.startsWith('/api/users/') && method === 'PATCH') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
+          const targetId = route.slice('/api/users/'.length);
+          if (!/^[0-9a-f-]{36}$/iu.test(targetId)) throw fail(404, 'user_not_found', '找不到這個使用者。');
+          if (targetId === user.id) throw fail(400, 'cannot_edit_self', '不能透過此畫面停用或修改自己的帳號權限。');
+          const targetUser = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(targetId);
+          if (!targetUser || targetUser.role !== 'user') throw fail(404, 'user_not_found', '找不到可管理的使用者。');
+          if (auditEvent) auditEvent.target = targetUser.username;
+          const body = await readJson(req);
+          if (typeof body.isActive !== 'boolean' || !Array.isArray(body.permissions)) throw fail(400, 'invalid_user_update', '請提供帳號啟用狀態與資料空間權限。');
+          const grants = new Map();
+          for (const item of body.permissions) {
+            if (!item || typeof item.shareId !== 'string' || !findShare.get(item.shareId)) throw fail(400, 'invalid_permission', '資料空間權限設定不正確。');
+            const canRead = Boolean(item.canRead);
+            grants.set(item.shareId, { canRead, canWrite: canRead && Boolean(item.canWrite) });
+          }
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            db.prepare('DELETE FROM share_permissions WHERE user_id = ?').run(targetId);
+            const grantPermission = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
+            for (const [shareId, grant] of grants) grantPermission.run(targetId, shareId, Number(grant.canRead), Number(grant.canWrite));
+            db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(Number(body.isActive), targetId);
+            if (!body.isActive) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+            db.exec('COMMIT');
+          } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+          }
+          return json(res, 200, { user: { ...getUserById.get(targetId), permissions: allShares.all().map((share) => {
+            const grant = getPerm.get(targetId, share.id) || { can_read: 0, can_write: 0 };
+            return { shareId: share.id, canRead: Boolean(grant.can_read), canWrite: Boolean(grant.can_write) };
+          }) } });
         }
         if (route === '/api/audit-settings' && method === 'GET') {
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看操作紀錄設定。');
