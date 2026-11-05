@@ -23,6 +23,9 @@
 | `GET /api/shares` | 是 | 列出目前使用者可讀取的分享資料夾與寫入權限。 |
 | `GET /api/files?shareId=…&path=…` | 是 | 需有該分享資料夾讀取權限；列出路徑下項目與 `canWrite`。 |
 | `GET /api/files/search?shareId=…&category=image\|video\|audio\|document\|media&search=…` | 是 | 需有該 Nanako 資料空間讀取權限；在所選資料空間內遞迴搜尋分類檔案，其中 `media` 同時包含音訊與影片，可用檔名片段篩選（最多 180 字元）。不跨分享資料空間、不包含資源回收桶或內部暫存目錄；每次最多檢查 100,000 個項目、回傳 1,000 個結果，回應含 `scannedEntries`、`skippedEntries`、`truncated` 與 `canWrite`。不回傳絕對路徑。 |
+| `GET /api/playback-progress?shareId=…` | 是 | 只回傳目前使用者在該資料空間、最近更新的最多 500 筆媒體續播位置；重新檢查讀取權限、NanakoData 路徑、檔案大小與修改時間，不符合的舊記錄會清除。 |
+| `POST /api/playback-progress` | 是 | JSON `{ "shareId", "path", "position", "duration" }`；需要該資料空間讀取權限，伺服器驗證檔案範圍與版本後儲存目前使用者的續播位置；低於 5 秒或已播放至少 95% 時會清除記錄。進度不是操作紀錄。 |
+| `DELETE /api/playback-progress?shareId=…&path=…` | 是 | 僅刪除目前使用者指定媒體的續播位置，不會異動媒體檔案。 |
 | `POST /api/folders` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "name" }`。 |
 | `POST /api/files/rename` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "newName" }`；只在同一個 Nanako 資料空間內重新命名，不可重新命名根目錄或覆寫同名項目。 |
 | `POST /api/files/move` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "destinationPath" }`；移至同一個 Nanako 資料空間內的既有資料夾，不可移動根目錄、移入自身子資料夾或覆寫同名項目。 |
@@ -81,7 +84,7 @@
 
 檔案 API 的根目錄固定為可攜式執行檔所在位置的 `NanakoData/data/files/<shareId>`；API 不接受外部路徑、磁碟代號或資料夾選擇請求。`/api/download` 只傳回該根目錄內的檔案；`DELETE /api/files` 與資源回收桶只操作 `NanakoData/data/trash`。相簿和播放器也只能讀取這些 Nanako 資料空間。Renderer 送入的 `path` 一律是分享資料空間內的相對路徑；伺服器會拒絕資料目錄中的符號連結／重新解析點。
 
-`/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。播放器的相容性測試只能選取目前 Nanako 分享資料空間的檔案，並透過同一個受權限檢查的 Range API 串流播放；不會開啟檔案系統選擇器或讀取外部媒體路徑。
+`/api/preview` 目前只處理單一 byte range；不支援多段 range、縮圖或轉碼。音訊／影片能否播放取決於 Electron 內建 Chromium 支援的容器與編碼格式。播放器的相容性測試只能選取目前 Nanako 分享資料空間的檔案，並透過同一個受權限檢查的 Range API 串流播放；不會開啟檔案系統選擇器或讀取外部媒體路徑。續播位置儲存在 NanakoData 的本機 SQLite，按 Nanako 使用者／資料空間／相對路徑分區；服務端再次驗證資料範圍與檔案大小／修改時間，每位使用者最多保存 500 筆。進度不會送往外部服務，也不寫入操作紀錄。
 
 ## 操作紀錄
 

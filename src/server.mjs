@@ -54,6 +54,7 @@ const DUPLICATE_SCAN_TTL_MS = 30 * 60 * 1000;
 const MAX_DUPLICATE_SCAN_JOBS = 2;
 const MAX_DUPLICATE_SELECTIONS = 200;
 const MAX_DUPLICATE_CLEANUP_ITEMS = 1000;
+const MAX_PLAYBACK_PROGRESS_ITEMS = 500;
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
@@ -359,7 +360,19 @@ function initDatabase(dataDir) {
       actor_name TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL,
       outcome TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS playback_progress (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+      relative_path TEXT NOT NULL,
+      file_size INTEGER NOT NULL CHECK(file_size >= 0),
+      modified_at REAL NOT NULL,
+      position REAL NOT NULL CHECK(position >= 0),
+      duration REAL NOT NULL CHECK(duration > 0),
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(user_id, share_id, relative_path)
+    );
     CREATE INDEX IF NOT EXISTS operation_logs_occurred_at_idx ON operation_logs(occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS playback_progress_updated_at_idx ON playback_progress(user_id, updated_at DESC);
   `);
   const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
   if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
@@ -1825,6 +1838,74 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             canWrite: Boolean(permission(user, share.id).can_write),
           }));
           return json(res, 200, { shares });
+        }
+        if (route === '/api/playback-progress' && ['GET', 'POST', 'DELETE'].includes(method)) {
+          const body = method === 'POST' ? await readJson(req) : null;
+          const shareId = method === 'POST'
+            ? String(body.shareId || '')
+            : (url.searchParams.get('shareId') || '');
+          requirePermission(user, shareId);
+          const { root } = shareRoot(shareId);
+          await rejectSymlinkTraversal(dataDir, dataDir, root);
+          const rawPath = method === 'POST' ? body.path : (url.searchParams.get('path') || '');
+          if (typeof rawPath !== 'string') throw fail(400, 'invalid_path', '檔案路徑不正確。');
+          const { target, parts } = resolveShareInside(root, rawPath);
+          const relativePath = parts.join('/');
+
+          if (method === 'GET') {
+            const rows = db.prepare(`SELECT relative_path, file_size, modified_at, position, duration, updated_at
+              FROM playback_progress WHERE user_id = ? AND share_id = ? ORDER BY updated_at DESC LIMIT ?`)
+              .all(user.id, shareId, MAX_PLAYBACK_PROGRESS_ITEMS);
+            const progress = [];
+            const removeStale = db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND share_id = ? AND relative_path = ?');
+            for (const row of rows) {
+              try {
+                const item = resolveShareInside(root, row.relative_path);
+                await rejectSymlinkTraversal(dataDir, root, item.target);
+                const info = await lstat(item.target);
+                if (!info.isFile() || info.size !== row.file_size || info.mtimeMs !== row.modified_at) {
+                  removeStale.run(user.id, shareId, row.relative_path);
+                  continue;
+                }
+                progress.push({ path: row.relative_path, position: row.position, duration: row.duration, updatedAt: row.updated_at });
+              } catch (error) {
+                if (!['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR', 'ELOOP', 'invalid_path', 'symlink_not_allowed', 'not_found'].includes(error.code)) throw error;
+                removeStale.run(user.id, shareId, row.relative_path);
+              }
+            }
+            return json(res, 200, { progress });
+          }
+
+          if (method === 'DELETE') {
+            db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND share_id = ? AND relative_path = ?')
+              .run(user.id, shareId, relativePath);
+            return json(res, 200, { ok: true });
+          }
+
+          const position = body.position;
+          const duration = body.duration;
+          if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0
+            || duration > 365 * 24 * 60 * 60 || position < 0 || position > duration + 1) {
+            throw fail(400, 'invalid_playback_progress', '播放進度資料不正確。');
+          }
+          const info = await lstat(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+          if (!info?.isFile() || info.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到媒體檔案。');
+          if (position < 5 || position / duration >= 0.95) {
+            db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND share_id = ? AND relative_path = ?')
+              .run(user.id, shareId, relativePath);
+            return json(res, 200, { saved: false, progress: null });
+          }
+          const updatedAt = Date.now();
+          db.prepare(`INSERT INTO playback_progress(user_id, share_id, relative_path, file_size, modified_at, position, duration, updated_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id, share_id, relative_path) DO UPDATE SET
+              file_size = excluded.file_size, modified_at = excluded.modified_at,
+              position = excluded.position, duration = excluded.duration, updated_at = excluded.updated_at`)
+            .run(user.id, shareId, relativePath, info.size, info.mtimeMs, Math.min(position, duration), duration, updatedAt);
+          db.prepare(`DELETE FROM playback_progress WHERE user_id = ? AND (share_id, relative_path) NOT IN (
+            SELECT share_id, relative_path FROM playback_progress WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?)`)
+            .run(user.id, user.id, MAX_PLAYBACK_PROGRESS_ITEMS);
+          return json(res, 200, { saved: true, progress: { path: relativePath, position, duration, updatedAt } });
         }
         if (route === '/api/system' && method === 'GET') {
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看電腦資訊。');

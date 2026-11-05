@@ -1,11 +1,17 @@
 import { filterAndSortFiles, mediaKind } from './file-listing.mjs';
+import {
+  formatPlaybackTime,
+  shouldResumePlayback,
+} from './playback-progress.mjs';
 
 const $ = (selector) => document.querySelector(selector);
 const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', albumScopeAll: true, playerScopeAll: true,
   albumSearch: '', playerSearch: '', albumLoadSequence: 0, playerLoadSequence: 0, albumSearchTimer: null, playerSearchTimer: null, view: null,
   currentItems: [], fileRenderedCount: 0, albumItems: [], albumImages: [], albumRenderedCount: 0, playerItems: [], playerRenderedCount: 0, pendingTrackPath: '',
-  activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
+  activeTrackPath: '', activeTrackShareId: '', activeTrackItem: null, activeTrackKind: '', playbackSequence: 0, playbackReady: false, lastProgressWrite: 0,
+  playerProgress: new Map(),
+  photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
   selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null, fileLoadSequence: 0,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
   vaultSourceShareId: '', vaultSourcePath: '', vaultSourceItems: [], vaultItems: [], vaultPendingImport: null, vaultPendingDelete: null, vaultPreviewId: '', vaultLockRequest: null, vaultStatusTimer: null,
@@ -45,6 +51,63 @@ function mediaItemPath(item, folderPath = '') {
   return item.path || (folderPath ? `${folderPath}/${item.name}` : item.name);
 }
 
+function playbackProgressKey(shareId, filePath) {
+  return `${shareId}\0${filePath}`;
+}
+
+function playbackProgressFor(shareId, filePath) {
+  return state.playerProgress.get(playbackProgressKey(shareId, filePath)) || null;
+}
+
+function refreshQueueProgress(shareId, filePath) {
+  const button = [...document.querySelectorAll('.queue-track')]
+    .find((candidate) => candidate.dataset.shareId === shareId && candidate.dataset.trackPath === filePath);
+  if (!button) return;
+  let hint = button.querySelector('.queue-resume');
+  const progress = playbackProgressFor(shareId, filePath);
+  if (!progress) { hint?.remove(); return; }
+  if (!hint) {
+    hint = document.createElement('small');
+    hint.className = 'queue-resume';
+    button.append(hint);
+  }
+  hint.textContent = `從 ${formatPlaybackTime(progress.position)} 繼續`;
+}
+
+async function persistActivePlayback(force = false, keepalive = false) {
+  const item = state.activeTrackItem;
+  if (!item || !state.playbackReady || !state.activeTrackPath || !state.activeTrackShareId) return false;
+  const player = state.activeTrackKind === 'video' ? $('#video-player') : $('#audio-player');
+  if (player.dataset.trackPath !== state.activeTrackPath || !Number.isFinite(player.duration) || player.duration <= 0) return false;
+  const now = Date.now();
+  if (!force && now - state.lastProgressWrite < 8_000) return false;
+  state.lastProgressWrite = now;
+  const shareId = state.activeTrackShareId;
+  const filePath = state.activeTrackPath;
+  const key = playbackProgressKey(shareId, filePath);
+  try {
+    const result = await api('/api/playback-progress', {
+      method: 'POST', keepalive,
+      body: JSON.stringify({ shareId, path: filePath, position: player.currentTime, duration: player.duration }),
+    });
+    if (result.saved) state.playerProgress.set(key, result.progress);
+    else state.playerProgress.delete(key);
+    refreshQueueProgress(shareId, filePath);
+    return result.saved;
+  } catch { return false; }
+}
+
+async function clearActivePlaybackProgress() {
+  if (!state.activeTrackItem || !state.activeTrackPath || !state.activeTrackShareId) return;
+  const shareId = state.activeTrackShareId;
+  const filePath = state.activeTrackPath;
+  const key = playbackProgressKey(shareId, filePath);
+  state.playerProgress.delete(key);
+  refreshQueueProgress(shareId, filePath);
+  const query = new URLSearchParams({ shareId, path: filePath });
+  await api(`/api/playback-progress?${query}`, { method: 'DELETE' }).catch(() => {});
+}
+
 function syncShareSelectors() {
   for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
     const element = $(selector);
@@ -54,6 +117,7 @@ function syncShareSelectors() {
 
 function selectShare(shareId) {
   if (shareId === state.shareId) return;
+  persistActivePlayback(true);
   if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
     const query = new URLSearchParams({ scanId: state.duplicateScanId });
     void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
@@ -1598,11 +1662,17 @@ function appendPlayerBatch() {
     const item = state.playerItems[index];
     const relativePath = mediaItemPath(item, state.playerPath);
     const button = document.createElement('button'); button.type = 'button'; button.className = 'queue-track';
-    button.dataset.trackPath = relativePath;
+    button.dataset.trackPath = relativePath; button.dataset.shareId = state.shareId;
     button.setAttribute('aria-current', String(state.activeTrackPath === relativePath));
     const name = document.createElement('span'); name.textContent = item.name;
     const details = document.createElement('small'); details.textContent = `${mediaKind(item.name) === 'video' ? '影片' : '音訊'} · ${formatSize(item.size)}${allScope ? ` · ${relativePath}` : ''}`;
-    button.append(name, details); button.addEventListener('click', () => playTrack(index)); queue.append(button);
+    button.append(name, details);
+    const progress = playbackProgressFor(state.shareId, relativePath);
+    if (progress) {
+      const resume = document.createElement('small'); resume.className = 'queue-resume';
+      resume.textContent = `從 ${formatPlaybackTime(progress.position)} 繼續`; button.append(resume);
+    }
+    button.addEventListener('click', () => { void playTrack(index); }); queue.append(button);
   }
   state.playerRenderedCount = end;
   const more = $('#player-more');
@@ -1685,7 +1755,7 @@ async function loadPlayer() {
   const loadSequence = ++state.playerLoadSequence;
   const queue = $('#player-queue');
   if (!state.shareId) {
-    state.playerItems = []; state.playerRenderedCount = 0; refreshMediaTestTracks(); queue.replaceChildren(); queue.setAttribute('aria-busy', 'false'); $('#player-more').hidden = true; $('#empty-player').hidden = false;
+    state.playerItems = []; state.playerRenderedCount = 0; state.playerProgress.clear(); refreshMediaTestTracks(); queue.replaceChildren(); queue.setAttribute('aria-busy', 'false'); $('#player-more').hidden = true; $('#empty-player').hidden = false;
     $('#empty-player strong').textContent = '沒有可存取的資料空間'; $('#empty-player span').textContent = '請確認目前帳號的 Nanako 資料空間權限。';
     resetPlayer(); return false;
   }
@@ -1705,8 +1775,12 @@ async function loadPlayer() {
     const query = allScope
       ? new URLSearchParams({ shareId: state.shareId, category: 'media', search: state.playerSearch })
       : new URLSearchParams({ shareId: state.shareId, path: state.playerPath });
-    const result = await api(`${allScope ? '/api/files/search' : '/api/files'}?${query}`);
+    const [result, progressResult] = await Promise.all([
+      api(`${allScope ? '/api/files/search' : '/api/files'}?${query}`),
+      api(`/api/playback-progress?${new URLSearchParams({ shareId: state.shareId })}`).catch(() => ({ progress: [] })),
+    ]);
     if (loadSequence !== state.playerLoadSequence) return false;
+    state.playerProgress = new Map(progressResult.progress.map((item) => [playbackProgressKey(state.shareId, item.path), item]));
     queue.setAttribute('aria-busy', 'false');
     const items = result.items;
     const folders = allScope ? [] : items.filter((item) => item.isDirectory);
@@ -1751,22 +1825,40 @@ async function loadPlayer() {
   }
 }
 
-function playTrack(index) {
+async function playTrack(index) {
   const item = state.playerItems[index];
   if (!item) return;
+  await persistActivePlayback(true);
   const kind = mediaKind(item.name);
   const relativePath = mediaItemPath(item, state.playerPath);
   const url = mediaUrl(state.shareId, relativePath);
   const video = $('#video-player'); const audio = $('#audio-player');
   const player = kind === 'video' ? video : audio;
   const inactive = kind === 'video' ? audio : video;
+  const sequence = ++state.playbackSequence;
+  inactive.pause(); inactive.removeAttribute('src'); delete inactive.dataset.trackPath; inactive.load(); inactive.hidden = true;
+  player.pause();
   state.activeTrackPath = relativePath;
+  state.activeTrackShareId = state.shareId;
+  state.activeTrackItem = item;
+  state.activeTrackKind = kind;
+  state.playbackReady = false;
+  state.lastProgressWrite = 0;
+  player.dataset.trackPath = relativePath; player.dataset.shareId = state.shareId;
+  player.addEventListener('loadedmetadata', () => {
+    if (sequence !== state.playbackSequence || state.activeTrackPath !== relativePath) return;
+    state.playbackReady = true;
+    const progress = playbackProgressFor(state.activeTrackShareId, relativePath);
+    if (!shouldResumePlayback(progress, player.duration)) return;
+    player.currentTime = progress.position;
+    $('#player-message').textContent = `已從 ${formatPlaybackTime(progress.position)} 繼續播放。`;
+    $('#player-message').hidden = false;
+  }, { once: true });
   player.onerror = () => {
     if (state.activeTrackPath === relativePath) $('#player-message').textContent = '瀏覽器無法播放這個檔案或編碼格式。你仍可從檔案管理下載原始檔。';
     $('#player-message').hidden = state.activeTrackPath !== relativePath;
   };
-  inactive.pause(); inactive.removeAttribute('src'); inactive.load(); inactive.hidden = true;
-  player.pause(); player.hidden = false; player.src = url; player.load();
+  player.hidden = false; player.src = url; player.load();
   $('#current-media-name').textContent = item.name;
   $('#player-placeholder').hidden = true;
   $('#player-message').hidden = true;
@@ -1782,14 +1874,19 @@ function playTrack(index) {
   });
 }
 
-function playNextTrack() {
+async function playNextTrack() {
+  await clearActivePlaybackProgress();
   const currentIndex = state.playerItems.findIndex((item) => mediaItemPath(item, state.playerPath) === state.activeTrackPath);
-  if (currentIndex >= 0 && currentIndex + 1 < state.playerItems.length) playTrack(currentIndex + 1);
+  if (currentIndex >= 0 && currentIndex + 1 < state.playerItems.length) void playTrack(currentIndex + 1);
 }
 
 function resetPlayer() {
+  void persistActivePlayback(true);
+  state.playbackSequence += 1;
+  state.playbackReady = false;
+  state.activeTrackPath = ''; state.activeTrackShareId = ''; state.activeTrackItem = null; state.activeTrackKind = '';
   for (const selector of ['#video-player', '#audio-player']) {
-    const player = $(selector); player.pause(); player.removeAttribute('src'); player.load(); player.hidden = true;
+    const player = $(selector); player.pause(); player.removeAttribute('src'); delete player.dataset.trackPath; delete player.dataset.shareId; player.load(); player.hidden = true;
   }
   $('#current-media-name').textContent = '尚未選取媒體';
   $('#player-placeholder').hidden = false;
@@ -2082,6 +2179,7 @@ $('#logout-button').addEventListener('click', async () => {
     await api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
     state.duplicateScanId = ''; state.duplicateScanStatus = 'cancelled';
   }
+  await persistActivePlayback(true);
   await api('/api/logout', { method: 'POST' }); closeAllWindows(); state.user = null; state.path = ''; showAuth(false);
 });
 $('#change-password-button').addEventListener('click', () => {
@@ -2292,6 +2390,17 @@ $('#photo-dialog').addEventListener('close', () => {
 });
 $('#video-player').addEventListener('ended', playNextTrack);
 $('#audio-player').addEventListener('ended', playNextTrack);
+for (const [kind, selector] of [['video', '#video-player'], ['audio', '#audio-player']]) {
+  const player = $(selector);
+  player.addEventListener('timeupdate', () => {
+    if (state.playbackReady && state.activeTrackKind === kind && player.dataset.trackPath === state.activeTrackPath) persistActivePlayback();
+  });
+  player.addEventListener('seeked', () => {
+    if (state.playbackReady && state.activeTrackKind === kind && player.dataset.trackPath === state.activeTrackPath) persistActivePlayback(true);
+  });
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) void persistActivePlayback(true); });
+window.addEventListener('pagehide', () => { void persistActivePlayback(true, true); });
 $('#media-test-track').addEventListener('change', () => {
   const option = $('#media-test-track').selectedOptions[0];
   $('#media-test-run').disabled = !option;

@@ -14,7 +14,7 @@ SMB 引擎至少要能在 Windows 執行、可安全綁定指定網卡、支援�
 
 - 來源：[專案原始碼](https://github.com/paltaio/rust-smb-server)、[0.8.0 API 文件](https://docs.rs/smb-server/0.8.0/smb_server/)；MIT 授權，尚未匯入本專案。
 - 文件顯示它提供 SMB 2.0.2 至 3.1.1 over TCP、NTLMv2、逐使用者／逐分享讀寫權限、SMB 簽章／加密選項、執行期分享與授權更新，以及以單一根目錄為界的 `LocalFsBackend`。這些能力與 Nanako 的 managed share 模型相符，值得優先做 Windows 概念驗證。
-- 尚不能視為通過：本次環境沒有 Rust toolchain，未執行 `cargo test`、Windows 編譯、SMB 用戶端互通、IP 綁定或停止服務測試；文件列出的限制包括 Kerberos、oplocks／directory leases、DFS、alternate data streams、reparse points 等。
+- 尚不能視為通過：已在工作目錄隔離安裝 Rust／Cargo 1.99.1 並嘗試 Windows 測試，但目前 Windows GNU target 缺少 `dlltool.exe`，依賴 `getrandom` 編譯前即停止；沒有執行到 crate 測試，因此不能視為候選程式碼測試失敗或通過。已新增 GitHub Actions Windows POC 工作流程，在 `windows-latest` 對固定 revision `c57fe2c1e58f3bb0882b4e762a89522824d16ccd` 執行其完整 workspace tests，結果待 main push 後取得。尚未完成 Windows SMB 用戶端互通、IP 綁定或停止服務測試；文件列出的限制包括 Kerberos、oplocks／directory leases、DFS、alternate data streams、reparse points 等。
 - 身分整合仍有缺口：crate 的帳號設定介面需要 SMB 密碼，而 Nanako 只保存登入密碼的 scrypt verifier，無法還原原始密碼。若無法新增安全的驗證介面，需設計獨立 SMB 密碼的設定、撤銷與持久化；不得把明文 SMB 密碼寫入 SQLite 或一般設定檔。
 - 決定：加入 Windows POC 候選，不採用、不開放監聽，也不加入 `THIRD_PARTY.md`。先驗證 Windows 建置、localhost 上 SMB2/3 認證與授權、符號連結／路徑隔離、檔案讀寫／改名／鎖定、簽章／加密與正常停止；再測 Windows、macOS Finder 及 Linux `smbclient`。TCP 445 與 Windows `LanmanServer` 衝突、標準 Windows 用戶端替代連接埠限制仍須獨立解決。
 

@@ -1,0 +1,34 @@
+name: Windows SMB server candidate POC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/smb-candidate-windows.yml'
+      - 'docs/smb-implementation-plan.md'
+      - 'docs/smb-prototype-results.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-test-suite:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - name: Check out the pinned candidate revision
+        shell: pwsh
+        run: |
+          $repository = Join-Path $env:RUNNER_TEMP 'rust-smb-server-0.8.0'
+          git clone --depth 1 --branch v0.8.0 https://github.com/paltaio/rust-smb-server.git $repository
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check out the SMB server candidate.' }
+          $actual = (git -C $repository rev-parse HEAD).Trim()
+          $expected = 'c57fe2c1e58f3bb0882b4e762a89522824d16ccd'
+          if ($actual -ne $expected) { throw "Expected $expected but checked out $actual." }
+          "Candidate revision: $actual" | Write-Output
+          "CARGO_MANIFEST_PATH=$repository\Cargo.toml" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run the candidate's Windows test suite
+        run: cargo test --workspace --manifest-path "$env:CARGO_MANIFEST_PATH"

@@ -173,7 +173,7 @@ async function closeNanako({ child, devtools }) {
   assert.equal(child.exitCode, 0, 'Electron should finish its normal close path.');
 }
 
-test('Electron desktop first-run and restart preserves Nanako files', {
+test('Electron desktop setup, restart and local media resume preserve Nanako state', {
   skip: process.platform !== 'win32',
   timeout: 120_000,
 }, async (t) => {
@@ -226,6 +226,48 @@ test('Electron desktop first-run and restart preserves Nanako files', {
     (text) => text.includes(folderName),
     'the newly created folder in the file list',
   );
+  const uploadedMedia = await running.devtools.evaluate(`(async () => {
+    const sampleRate = 8_000;
+    const dataBytes = sampleRate * 2 * 30;
+    const bytes = new Uint8Array(44 + dataBytes);
+    const view = new DataView(bytes.buffer);
+    const writeText = (offset, value) => { for (let index = 0; index < value.length; index += 1) bytes[offset + index] = value.charCodeAt(index); };
+    writeText(0, 'RIFF'); view.setUint32(4, 36 + dataBytes, true); writeText(8, 'WAVE');
+    writeText(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true); writeText(36, 'data'); view.setUint32(40, dataBytes, true);
+    const shareId = document.querySelector('#share-select').value;
+    const query = new URLSearchParams({ shareId, path: '', name: 'desktop-smoke-resume.wav' });
+    const response = await fetch('/api/upload?' + query, { method: 'POST', body: new Blob([bytes], { type: 'audio/wav' }) });
+    return { status: response.status, shareId, message: response.ok ? '' : await response.text() };
+  })()`);
+  assert.equal(uploadedMedia.status, 201, `media fixture upload failed: ${uploadedMedia.message}`);
+  await running.devtools.evaluate(`(() => {
+    document.querySelector('#launcher-toggle').click();
+    document.querySelector('#launcher-menu [data-open-view="player"]').click();
+    return true;
+  })()`);
+  await waitForValue(
+    running.devtools,
+    `!!document.querySelector('#player-queue .queue-track[data-track-path="desktop-smoke-resume.wav"]')`,
+    Boolean,
+    'the uploaded media in the player queue',
+  );
+  await running.devtools.evaluate(`(() => { document.querySelector('#player-queue .queue-track[data-track-path="desktop-smoke-resume.wav"]').click(); return true; })()`);
+  await waitForValue(
+    running.devtools,
+    `document.querySelector('#audio-player')?.readyState >= 1`,
+    Boolean,
+    'media metadata before saving a resume point',
+  );
+  await running.devtools.evaluate(`(() => { const player = document.querySelector('#audio-player'); player.pause(); player.currentTime = 12; return true; })()`);
+  const savedProgress = await waitForValue(
+    running.devtools,
+    `fetch('/api/playback-progress?' + new URLSearchParams({ shareId: ${JSON.stringify(uploadedMedia.shareId)} })).then((response) => response.json()).then((result) => result.progress.find((item) => item.path === 'desktop-smoke-resume.wav')?.position ?? null)`,
+    (value) => Number.isFinite(value) && value >= 11.9,
+    'the local playback resume point',
+  );
+  assert.ok(savedProgress >= 11.9 && savedProgress <= 12.1);
   await running.devtools.evaluate(`(() => {
     document.querySelector('#launcher-toggle').click();
     document.querySelector('#launcher-menu [data-open-view="users"]').click();
@@ -269,6 +311,27 @@ test('Electron desktop first-run and restart preserves Nanako files', {
     'the persisted folder after restart',
   );
   assert.equal(retained.account, adminUsername);
+  await running.devtools.evaluate(`(() => {
+    document.querySelector('#launcher-toggle').click();
+    document.querySelector('#launcher-menu [data-open-view="player"]').click();
+    return true;
+  })()`);
+  await waitForValue(
+    running.devtools,
+    `!!document.querySelector('#player-queue .queue-track[data-track-path="desktop-smoke-resume.wav"]')`,
+    Boolean,
+    'the persisted media in the restarted player queue',
+  );
+  await running.devtools.evaluate(`(() => { document.querySelector('#player-queue .queue-track[data-track-path="desktop-smoke-resume.wav"]').click(); return true; })()`);
+  const resumed = await running.devtools.evaluate(`(async () => {
+    const player = document.querySelector('#audio-player');
+    if (player.readyState < 1) await new Promise((resolve) => player.addEventListener('loadedmetadata', resolve, { once: true }));
+    player.pause();
+    return { ready: player.readyState >= 1, currentTime: player.currentTime, message: document.querySelector('#player-message')?.textContent };
+  })()`);
+  assert.equal(resumed.ready, true, 'media metadata should reload after restart');
+  assert.ok(resumed.currentTime >= 11.9 && resumed.currentTime <= 12.5, `expected resume near 12 seconds, got ${resumed.currentTime}`);
+  assert.match(resumed.message, /0:12/u);
   await closeNanako(running);
   running = null;
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -888,6 +888,105 @@ test('media preview enforces permissions and serves byte ranges for playback', a
   const viewerCookie = login.response.headers.get('set-cookie').split(';')[0];
   const denied = await request(`/api/preview?${previewQuery}`, { headers: { Cookie: viewerCookie } });
   assert.equal(denied.response.status, 403);
+});
+
+test('playback resume is user-scoped, permission-checked, file-version-aware and persistent without audit entries', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie: adminCookie, shareId } = await setup();
+  const auth = { Cookie: adminCookie, 'Content-Type': 'application/json' };
+  await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'resume.mp3' })}`, {
+    method: 'POST', headers: { Cookie: adminCookie }, body: Buffer.from('media bytes'),
+  });
+  const added = await request('/api/users', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ username: 'resume-reader', password: 'resume-reader-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }),
+  });
+  assert.equal(added.response.status, 201);
+  const login = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'resume-reader', password: 'resume-reader-passphrase-2026' }),
+  });
+  const readerCookie = login.response.headers.get('set-cookie').split(';')[0];
+  const readerAuth = { Cookie: readerCookie, 'Content-Type': 'application/json' };
+  const query = new URLSearchParams({ shareId });
+
+  const unauthorised = await request(`/api/playback-progress?${query}`, { headers: { Cookie: 'invalid' } });
+  assert.equal(unauthorised.response.status, 401);
+  const initial = await request(`/api/playback-progress?${query}`, { headers: { Cookie: readerCookie } });
+  assert.equal(initial.response.status, 200);
+  assert.deepEqual(initial.body.progress, []);
+
+  const traversal = await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: '../outside.mp3', position: 40, duration: 100 }),
+  });
+  assert.equal(traversal.response.status, 400);
+  const invalid = await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 40, duration: 0 }),
+  });
+  assert.equal(invalid.response.status, 400);
+
+  const saved = await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 40, duration: 100 }),
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.body.saved, true);
+  const progressDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try {
+    const insertProgress = progressDb.prepare(`INSERT INTO playback_progress(
+      user_id, share_id, relative_path, file_size, modified_at, position, duration, updated_at
+    ) VALUES(?,?,?,?,?,?,?,?)`);
+    const now = Date.now();
+    for (let index = 0; index < 500; index += 1) {
+      insertProgress.run(added.body.user.id, shareId, `stale-${index}.mp3`, 1, 1, 10, 100, now - 1_000 - index);
+    }
+    assert.equal(progressDb.prepare('SELECT COUNT(*) AS count FROM playback_progress WHERE user_id = ?').get(added.body.user.id).count, 501);
+  } finally { progressDb.close(); }
+  const capped = await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 42, duration: 100 }),
+  });
+  assert.equal(capped.body.saved, true);
+  const cappedDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
+  try {
+    assert.equal(cappedDb.prepare('SELECT COUNT(*) AS count FROM playback_progress WHERE user_id = ?').get(added.body.user.id).count, 500);
+  } finally { cappedDb.close(); }
+  const readerList = await request(`/api/playback-progress?${query}`, { headers: { Cookie: readerCookie } });
+  assert.deepEqual(readerList.body.progress.map(({ path: filePath, position }) => [filePath, position]), [['resume.mp3', 42]]);
+  const adminList = await request(`/api/playback-progress?${query}`, { headers: { Cookie: adminCookie } });
+  assert.deepEqual(adminList.body.progress, [], 'another Nanako user cannot read this user’s resume point');
+
+  const completed = await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 96, duration: 100 }),
+  });
+  assert.equal(completed.body.saved, false);
+  assert.deepEqual((await request(`/api/playback-progress?${query}`, { headers: { Cookie: readerCookie } })).body.progress, []);
+
+  await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 40, duration: 100 }),
+  });
+  const mediaFile = path.join(dataDir, 'files', shareId, 'resume.mp3');
+  const changedTime = new Date((await stat(mediaFile)).mtimeMs + 2_000);
+  await writeFile(mediaFile, 'new bytes!!');
+  await utimes(mediaFile, changedTime, changedTime);
+  const stale = await request(`/api/playback-progress?${query}`, { headers: { Cookie: readerCookie } });
+  assert.deepEqual(stale.body.progress, [], 'changed file versions discard obsolete resume points');
+
+  await request('/api/playback-progress', {
+    method: 'POST', headers: readerAuth,
+    body: JSON.stringify({ shareId, path: 'resume.mp3', position: 40, duration: 100 }),
+  });
+  const deleted = await request(`/api/playback-progress?${new URLSearchParams({ shareId, path: 'resume.mp3' })}`, {
+    method: 'DELETE', headers: { Cookie: readerCookie },
+  });
+  assert.equal(deleted.response.status, 200);
+  assert.deepEqual((await request(`/api/playback-progress?${query}`, { headers: { Cookie: readerCookie } })).body.progress, []);
+  const logs = await request('/api/audit-logs', { headers: { Cookie: adminCookie } });
+  assert.equal(logs.body.logs.some((entry) => /播放進度|續播/u.test(entry.action)), false);
 });
 
 test('path traversal and LAN binding are rejected in this prototype', async (t) => {

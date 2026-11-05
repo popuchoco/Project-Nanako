@@ -2,7 +2,9 @@
 
 ## 未發行
 
-- SMB POC 研究新增 `paltaio/rust-smb-server` 0.8.0 為待驗證候選：文件所示逐使用者／分享權限與受限根目錄符合優先評估條件，但尚未完成 Windows 編譯或用戶端測試；保留 Nanako scrypt 密碼驗證器無法重建 SMB 明文憑證、TCP 445 衝突與協定功能缺口等閘門。未匯入套件、未開啟監聽或修改 Windows 分享設定。
+- 播放器新增本機續播：播放進度依 Nanako 使用者、資料空間與檔案大小／修改時間識別，儲存在 NanakoData SQLite；媒體讀取權限與檔案版本會由服務端再次檢查，自動清除已完成或已變更檔案的進度，每位使用者最多保留 500 筆，資料不送出亦不寫入操作紀錄。Electron 桌面重開煙霧測試涵蓋續播位置還原。
+- 此輪 `npm test` 全數 64 項通過；Windows x64 可攜式封裝成功產生 102,842,579-byte 執行檔，封裝後媒體相容性測試模式產生 JSON 報告。GitHub Actions 已加入一般 Windows 測試／封裝與 SMB 候選 Windows POC 工作流程。
+- SMB POC 研究新增 `paltaio/rust-smb-server` 0.8.0 為待驗證候選：本機 Rust 測試因 Windows GNU 工具鏈缺少 `dlltool.exe` 未能開始編譯；新增 GitHub Actions `windows-latest` 工作流程，針對固定 commit 執行完整 workspace tests，結果待取得。保留 Nanako scrypt 密碼驗證器無法重建 SMB 明文憑證、TCP 445 衝突與協定功能缺口等閘門；未匯入套件、未開啟監聽或修改 Windows 分享設定。
 - 新增 Windows Electron 桌面煙霧測試，實際啟動介面完成管理員首次設定、登入、建立使用者與資料夾、正常關閉及重開後確認資料仍可見。測試找到並修正桌面互動初始化對已移除 `logout-menu-button` 的空元素綁定，以及非同步登入／初始設定／使用者建立完成後讀取失效 `event.currentTarget` 的問題。
 - v0.3 加密空間原型已補齊復原金鑰建立／離線復原／輪替、密碼變更、加密 sidecar 與孤兒核對、密文資源回收筒、同一 NanakoData 內加密備份／還原，以及移入進度／取消。加密媒體支援受控 Range 串流與並行讀取；96 MiB 檔案整合測試驗證串流操作的 peak RSS 增量低於來源檔大小。新寫入採 128 KiB AES-256-GCM 區塊，仍可讀取早期 v1 原型的 1 MiB 區塊。全套 60 項測試通過；仍是原型，尚需獨立安全審查、格式升級測試及磁碟滿載／強制中斷故障注入，不保證 SSD 安全抹除或異地備份。
 - ZIP 原型補齊進度／取消與暫存清理；修改封存內容會因 CRC 驗證失敗而拒絕解壓。32 MiB 串流測試及 Windows PowerShell `Compress-Archive`／`Expand-Archive` 互通測試通過；採用的 zip.js 2.24.0 已列於 `THIRD_PARTY.md`。更多大型封存、多環境記憶體量測及多類損毀格式仍待驗證。
