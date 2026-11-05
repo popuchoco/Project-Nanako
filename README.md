@@ -19,7 +19,7 @@
 - 支援資料夾瀏覽、建立資料夾、上傳、下載、重新命名、移動、複製、批次選取／操作、移至資源回收桶、還原及管理員永久刪除；所有操作都限制在同一 Nanako 資料空間內，不接受外部路徑。
 - 相簿可瀏覽目前資料夾圖片並開啟全螢幕檢視；播放器支援單一資料夾內的音訊／影片播放清單與 HTTP Range 串流。
 - 不含 SSO、雲端帳號、遠端中繼、遙測、更新檢查或硬體控制。
-- SMB、區域網路介面選擇及正式外部整合 API 尚未實作，列入後續規劃。
+- SMB 與區域網路介面選擇尚未實作；SMB 是本專案必要功能，預設關閉的安全分享服務列入 v0.4。正式外部整合 API 尚未實作，列入後續規劃。
 - 加密空間／檔案上鎖尚未實作；目前 NanakoData 中的一般檔案仍可由具有該目錄 Windows 存取權的使用者直接開啟。後續上鎖功能會以實際加密保存為前提，而非只隱藏檔案或調整權限。
 - 檔案管理提供 NanakoData 內 ZIP 串流建立與解壓縮原型；已加入路徑／CRC／大小限制、失敗暫存清理與 ZIP Slip 測試。一般檔案複製採串流及暫存後發佈，批次操作逐項記錄；尚未完成大檔案記憶體量測、取消／進度及 Windows 檔案總管互通性驗證。
 - 「我的電腦」只列出使用者有權存取的 Nanako 資料空間，不會列出 Windows 磁碟、已知資料夾或任意路徑。匯入檔案會將使用者選取的檔案複製到 Nanako 資料目錄；其他檔案操作只會存取 Nanako 目錄。
@@ -73,6 +73,8 @@ npm run desktop # Electron 桌面視窗
 - [台灣用語指南](docs/terminology.md)
 - [Mozilla Public License 2.0](LICENSE)
 - [介面與產品設計參考（不含採用原始碼）](docs/design-references.md)
+- [SMB 區域網路分享實作規劃](docs/smb-implementation-plan.md)
+- [ADR-0015：Windows SMB 區域網路分享](docs/decisions/ADR-0015-smb-sharing.md)
 - [加密空間規劃與 ZIP 原型／安全驗證](docs/feature-plan-encryption-and-archives.md)
 - [ADR-0011：操作紀錄與保留期限](docs/decisions/ADR-0011-operation-audit-and-retention.md)
 - [ADR-0012：使用者管理與登入節流](docs/decisions/ADR-0012-user-administration-and-login-throttling.md)

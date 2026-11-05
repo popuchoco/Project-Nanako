@@ -69,7 +69,7 @@ ZIP 原型先限定一般 Nanako 檔案並以串流方式建立／解壓，進�
 
 ## 網路與 API 演進
 
-目前 API 與 UI 同源，只供本機用戶端使用；`GET /api/network` 只回報目前服務位址、連接埠及介面清單，並非網路設定功能。網路介面選擇、區域網路共享及 SMB 尚未實作。後續要開放區域網路時，需另行設計並測試：
+目前 API 與 UI 同源，只供本機用戶端使用；`GET /api/network` 只回報目前服務位址、連接埠及介面清單，並非網路設定功能。網路介面選擇、區域網路共享及 SMB 尚未實作，但 SMB 是產品必要功能。SMB 管理 UI 可參考 SMB 檔案用戶端的檔案操作流程及 Samba 管理介面的服務／分享／帳號狀態呈現；該用戶端不是 SMB Server，Linux Samba 管理流程也不能直接套用 Windows。服務端技術選擇及帳號映射需先完成概念驗證，依 [ADR-0015](decisions/ADR-0015-smb-sharing.md) 與 [SMB 實作規劃](smb-implementation-plan.md) 推進。後續要開放區域網路時，需另行設計並測試：
 
 1. 由使用者明確選取介面／IP、連接埠與是否啟用，預設維持關閉。
 2. 避免任意 host、DNS rebinding、跨來源請求及 CSRF；明確驗證 Host、Origin 與授權。
