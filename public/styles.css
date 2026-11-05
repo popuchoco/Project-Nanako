@@ -261,6 +261,12 @@
 .vault-content-panel{display:grid;gap:14px;margin-top:14px}
 .vault-browser-card{min-width:0;padding:16px}
 .vault-recovery-card{padding:16px;border-left:3px solid #d9a13c}
+.vault-recovery-card textarea,.vault-recovery-unlock textarea,.vault-recovery-unlock input{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:7px;padding:10px;background:#fff;color:var(--ink);font:inherit;line-height:1.5}
+.vault-recovery-card textarea{font-family:ui-monospace,Consolas,monospace;letter-spacing:.035em;overflow-wrap:anywhere}
+.vault-recovery-unlock{margin-top:16px}
+.vault-recovery-unlock summary{cursor:pointer;font-weight:600;color:var(--accent-dark);padding:8px 0}
+.vault-recovery-unlock .form-stack{margin-top:12px}
+.vault-trash-section{margin-top:24px;border-top:1px solid var(--line);padding-top:18px}
 .vault-recovery-list{display:grid;gap:9px}
 .vault-recovery-item{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px;border:1px solid #e0e7ed;border-radius:10px;background:#fbfdff}
 .vault-recovery-item p{margin:5px 0 0;color:#6a7c8a;font-size:12px;overflow-wrap:anywhere}

@@ -8,7 +8,9 @@ import {
 import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCallback);
-export const VAULT_CHUNK_BYTES = 1024 * 1024;
+export const VAULT_CHUNK_BYTES = 128 * 1024;
+// Continue reading 1 MiB records written by earlier v1 development builds.
+const VAULT_MAX_CHUNK_BYTES = 1024 * 1024;
 export const VAULT_FORMAT_VERSION = 1;
 const KEY_BYTES = 32;
 const SALT_BYTES = 16;
@@ -116,6 +118,10 @@ function aadForEnvelope(userId) {
   return Buffer.from(`Project Nanako vault key envelope v${VAULT_FORMAT_VERSION}:${userId}`, 'utf8');
 }
 
+function aadForRecoveryEnvelope(userId) {
+  return Buffer.from(`Project Nanako vault recovery envelope v${VAULT_FORMAT_VERSION}:${userId}`, 'utf8');
+}
+
 function encodeBase64Url(value) { return value.toString('base64url'); }
 
 function decodeBase64Url(value, expectedBytes, label, maximumBytes = expectedBytes) {
@@ -135,13 +141,74 @@ async function deriveWrappingKey(password, salt) {
   });
 }
 
-/** Create a password-wrapped random vault master key. Caller must clear masterKey after locking. */
-export async function createVaultKeyEnvelope(password, userId) {
-  assertPassword(password);
+function recoveryCodeBytes(recoveryCode) {
+  if (typeof recoveryCode !== 'string') throw vaultError('invalid_recovery_code', '復原金鑰格式不正確。');
+  const normalized = recoveryCode.replace(/[\s-]/gu, '').toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(normalized)) throw vaultError('invalid_recovery_code', '復原金鑰格式不正確。');
+  return normalized;
+}
+
+/** Generate a one-time, 256-bit recovery key. Display it once and never persist the plaintext. */
+export function createVaultRecoveryCode() {
+  return randomBytes(32).toString('hex');
+}
+
+/** Wrap the existing master key under an independent recovery key. */
+export async function createVaultRecoveryEnvelope(recoveryCode, masterKey, userId) {
+  const secret = recoveryCodeBytes(recoveryCode);
+  assertKey(masterKey);
   assertUuid(userId, '使用者識別碼');
   const salt = randomBytes(SALT_BYTES);
   const nonce = randomBytes(NONCE_BYTES);
-  const masterKey = randomBytes(KEY_BYTES);
+  let wrappingKey;
+  try {
+    wrappingKey = await deriveWrappingKey(secret, salt);
+    const cipher = createCipheriv('aes-256-gcm', wrappingKey, nonce, { authTagLength: TAG_BYTES });
+    cipher.setAAD(aadForRecoveryEnvelope(userId));
+    const ciphertext = Buffer.concat([cipher.update(masterKey), cipher.final()]);
+    return {
+      formatVersion: VAULT_FORMAT_VERSION,
+      kdf: { ...KDF, salt: encodeBase64Url(salt) },
+      wrap: {
+        cipher: 'aes-256-gcm',
+        nonce: encodeBase64Url(nonce),
+        ciphertext: encodeBase64Url(ciphertext),
+        tag: encodeBase64Url(cipher.getAuthTag()),
+      },
+    };
+  } finally { wrappingKey?.fill(0); }
+}
+
+/** Unlock the same master key using the separately stored recovery envelope. */
+export async function unlockVaultWithRecoveryCode(envelope, recoveryCode, userId) {
+  const secret = recoveryCodeBytes(recoveryCode);
+  assertUuid(userId, '使用者識別碼');
+  if (!envelope || envelope.formatVersion !== VAULT_FORMAT_VERSION
+    || envelope.kdf?.name !== KDF.name || envelope.kdf.N !== KDF.N || envelope.kdf.r !== KDF.r || envelope.kdf.p !== KDF.p
+    || envelope.wrap?.cipher !== 'aes-256-gcm') {
+    throw vaultError('invalid_vault_config', '加密空間復原金鑰資料格式不支援或已損毀。');
+  }
+  const salt = decodeBase64Url(envelope.kdf.salt, SALT_BYTES, '復原金鑰鹽值');
+  const nonce = decodeBase64Url(envelope.wrap.nonce, NONCE_BYTES, '復原金鑰包覆 nonce');
+  const ciphertext = decodeBase64Url(envelope.wrap.ciphertext, KEY_BYTES, '復原包覆金鑰');
+  const tag = decodeBase64Url(envelope.wrap.tag, TAG_BYTES, '復原金鑰驗證標記');
+  const wrappingKey = await deriveWrappingKey(secret, salt);
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', wrappingKey, nonce, { authTagLength: TAG_BYTES });
+    decipher.setAAD(aadForRecoveryEnvelope(userId));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch {
+    throw vaultError('vault_recovery_failed', '復原金鑰不正確，或加密空間復原資料已損毀。');
+  } finally { wrappingKey.fill(0); }
+}
+
+async function wrapMasterKey(password, masterKey, userId) {
+  assertPassword(password);
+  assertKey(masterKey);
+  assertUuid(userId, '使用者識別碼');
+  const salt = randomBytes(SALT_BYTES);
+  const nonce = randomBytes(NONCE_BYTES);
   let wrappingKey;
   try {
     wrappingKey = await deriveWrappingKey(password, salt);
@@ -158,13 +225,20 @@ export async function createVaultKeyEnvelope(password, userId) {
         tag: encodeBase64Url(cipher.getAuthTag()),
       },
     };
-    return { envelope, masterKey };
-  } catch (error) {
-    masterKey.fill(0);
-    throw error;
-  } finally {
-    wrappingKey?.fill(0);
-  }
+    return envelope;
+  } finally { wrappingKey?.fill(0); }
+}
+
+/** Create a password-wrapped random vault master key. Caller must clear masterKey after locking. */
+export async function createVaultKeyEnvelope(password, userId) {
+  const masterKey = randomBytes(KEY_BYTES);
+  try { return { envelope: await wrapMasterKey(password, masterKey, userId), masterKey }; }
+  catch (error) { masterKey.fill(0); throw error; }
+}
+
+/** Re-wrap an existing master key with a new password without re-encrypting vault objects. */
+export async function rewrapVaultMasterKey(password, masterKey, userId) {
+  return wrapMasterKey(password, masterKey, userId);
 }
 
 /** Unlock a master key only for the user identity bound into its authenticated envelope. */
@@ -219,10 +293,14 @@ async function encryptRecord(destination, key, objectId, prefix, counter, plaint
   const length = plaintext.length;
   const cipher = createCipheriv('aes-256-gcm', key, nonceFor(prefix, counter), { authTagLength: TAG_BYTES });
   cipher.setAAD(aadForChunk(objectId, prefix, counter, length));
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const recordHeader = Buffer.alloc(4);
   recordHeader.writeUInt32BE(length);
-  await writeChunk(destination, Buffer.concat([recordHeader, ciphertext, cipher.getAuthTag()]));
+  await writeChunk(destination, recordHeader);
+  const ciphertext = cipher.update(plaintext);
+  if (ciphertext.length) await writeChunk(destination, ciphertext);
+  const final = cipher.final();
+  if (final.length) await writeChunk(destination, final);
+  await writeChunk(destination, cipher.getAuthTag());
 }
 
 /**
@@ -235,30 +313,32 @@ export async function encryptVaultStream(source, destination, { key, objectId })
   const prefix = randomBytes(NONCE_PREFIX_BYTES);
   await writeChunk(destination, Buffer.concat([MAGIC, prefix]));
 
-  let pending = Buffer.alloc(0);
+  // Reuse a fixed-size staging buffer. Repeated Buffer.concat on each incoming
+  // stream chunk creates quadratic transient allocations for large files.
+  const pending = Buffer.allocUnsafe(VAULT_CHUNK_BYTES);
+  let pendingLength = 0;
   let counter = 0n;
   let plaintextBytes = 0;
   for await (const value of source) {
     const input = Buffer.isBuffer(value) ? value : Buffer.from(value);
     let offset = 0;
     while (offset < input.length) {
-      const take = Math.min(VAULT_CHUNK_BYTES - pending.length, input.length - offset);
-      pending = pending.length === 0 && take === VAULT_CHUNK_BYTES
-        ? input.subarray(offset, offset + take)
-        : Buffer.concat([pending, input.subarray(offset, offset + take)]);
+      const take = Math.min(VAULT_CHUNK_BYTES - pendingLength, input.length - offset);
+      input.copy(pending, pendingLength, offset, offset + take);
+      pendingLength += take;
       offset += take;
-      if (pending.length === VAULT_CHUNK_BYTES) {
+      if (pendingLength === VAULT_CHUNK_BYTES) {
         if (counter === 0xffff_ffff_ffff_ffffn) throw vaultError('vault_stream_too_large', '加密空間物件超過格式容量上限。');
         await encryptRecord(destination, key, objectId, prefix, counter, pending);
-        plaintextBytes += pending.length;
+        plaintextBytes += pendingLength;
         counter += 1n;
-        pending = Buffer.alloc(0);
+        pendingLength = 0;
       }
     }
   }
-  if (pending.length > 0) {
-    await encryptRecord(destination, key, objectId, prefix, counter, pending);
-    plaintextBytes += pending.length;
+  if (pendingLength > 0) {
+    await encryptRecord(destination, key, objectId, prefix, counter, pending.subarray(0, pendingLength));
+    plaintextBytes += pendingLength;
     counter += 1n;
   }
   // An authenticated empty terminal record detects both truncation and trailing data.
@@ -269,25 +349,38 @@ export async function encryptVaultStream(source, destination, { key, objectId })
 class AsyncByteReader {
   constructor(source) {
     this.iterator = source[Symbol.asyncIterator]();
-    this.buffer = Buffer.alloc(0);
+    this.chunks = [];
+    this.bufferedBytes = 0;
     this.ended = false;
   }
 
   async readExactly(length) {
-    while (this.buffer.length < length && !this.ended) {
+    while (this.bufferedBytes < length && !this.ended) {
       const { value, done } = await this.iterator.next();
       if (done) { this.ended = true; break; }
       const next = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      this.buffer = this.buffer.length ? Buffer.concat([this.buffer, next]) : next;
+      if (next.length) {
+        this.chunks.push(next);
+        this.bufferedBytes += next.length;
+      }
     }
-    if (this.buffer.length < length) throw vaultError('vault_truncated', '加密空間物件不完整。');
-    const result = this.buffer.subarray(0, length);
-    this.buffer = this.buffer.subarray(length);
+    if (this.bufferedBytes < length) throw vaultError('vault_truncated', '加密空間物件不完整。');
+    const result = Buffer.allocUnsafe(length);
+    let written = 0;
+    while (written < length) {
+      const head = this.chunks[0];
+      const take = Math.min(head.length, length - written);
+      head.copy(result, written, 0, take);
+      written += take;
+      this.bufferedBytes -= take;
+      if (take === head.length) this.chunks.shift();
+      else this.chunks[0] = head.subarray(take);
+    }
     return result;
   }
 
   async assertEnd() {
-    if (this.buffer.length) throw vaultError('vault_trailing_data', '加密空間物件包含多餘資料。');
+    if (this.bufferedBytes) throw vaultError('vault_trailing_data', '加密空間物件包含多餘資料。');
     while (!this.ended) {
       const { value, done } = await this.iterator.next();
       this.ended = done;
@@ -309,14 +402,15 @@ export async function* decryptVaultStream(source, { key, objectId }) {
   while (!sawTerminal) {
     const recordHeader = await reader.readExactly(4);
     const length = recordHeader.readUInt32BE(0);
-    if (length > VAULT_CHUNK_BYTES) throw vaultError('vault_format_invalid', '加密空間物件區塊大小不正確。');
+    if (length > VAULT_MAX_CHUNK_BYTES) throw vaultError('vault_format_invalid', '加密空間物件區塊大小不正確。');
     const ciphertext = await reader.readExactly(length);
     const tag = await reader.readExactly(TAG_BYTES);
     try {
       const decipher = createDecipheriv('aes-256-gcm', key, nonceFor(prefix, counter), { authTagLength: TAG_BYTES });
       decipher.setAAD(aadForChunk(objectId, prefix, counter, length));
       decipher.setAuthTag(tag);
-      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      const plaintext = decipher.update(ciphertext);
+      decipher.final();
       if (length === 0) sawTerminal = true;
       else yield plaintext;
     } catch {

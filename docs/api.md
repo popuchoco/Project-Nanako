@@ -43,16 +43,31 @@
 | `POST /api/activity` | 是 | 記錄使用者開啟／切換 Nanako 畫面及視窗操作；JSON `{ "view", "action"? }`。`action` 可為 `open`、`focus`、`minimize`、`maximize`、`restore`、`close`、`move`、`preview`；省略時視為 `open`。僅接受已知畫面與操作代碼，管理畫面限管理員。 |
 | `POST /api/archive/create` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，在來源旁建立同名 ZIP。來源、暫存與輸出都限制在 Nanako 資料空間。 |
 | `POST /api/archive/extract` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，只接受 ZIP，解壓至同名新資料夾；不覆寫現有資料。拒絕路徑跳脫、符號連結、加密 ZIP、衝突路徑及超出大小／項目數限制的封存檔。 |
+| `GET /api/archive/status` | 是 | 查詢目前使用者 ZIP 壓縮／解壓工作的階段、已處理位元組與項目數。 |
+| `POST /api/archive/cancel` | 是 | 取消目前使用者的 ZIP 工作；成品發佈階段開始後會拒絕取消，以避免回報不明確的結果。 |
 | `GET /api/vault/status` | 是 | 回傳目前使用者的加密空間是否已建立及已解鎖；不回傳金鑰或敏感中繼資料。 |
-| `POST /api/vault/setup` | 是 | JSON `{ "password" }`；為目前 Nanako 使用者建立獨立 vault master key 與密碼包覆資料。加密密碼需 12–256 字元；目前沒有復原或重設機制。 |
+| `POST /api/vault/setup` | 是 | JSON `{ "password" }`；為目前 Nanako 使用者建立獨立 vault master key、密碼包覆資料及一次性復原金鑰。加密密碼需 12–256 字元；復原金鑰只在建立時顯示一次，使用者須自行離線保管。 |
 | `POST /api/vault/unlock` | 是 | JSON `{ "password" }`；錯誤密碼回傳 `401`，錯誤 5 次後節流 15 分鐘並回傳 `429`。解鎖金鑰只在服務程序記憶體中，閒置 15 分鐘後鎖定。 |
+| `POST /api/vault/recover` | 是 | JSON `{ "recoveryCode" }`；以一次性復原金鑰解鎖加密空間。復原金鑰無法復原時不能由管理員重設 vault 金鑰。 |
+| `POST /api/vault/recovery-key` | 是 | 需要已解鎖；建立新的復原金鑰並更新包覆資料，回應只顯示新金鑰一次；舊金鑰立即失效。 |
+| `POST /api/vault/password` | 是 | 需要已解鎖；JSON `{ "currentPassword", "newPassword" }`；變更包覆密碼但保留 master key 與既有加密物件。 |
 | `POST /api/vault/lock` | 是 | 立即鎖定目前使用者加密空間；會取消進行中的加密／解密串流，作業清理完成後清除金鑰參照。 |
 | `GET /api/vault/objects` | 是 | 需要加密空間已解鎖；只列出目前使用者的加密物件及解密後中繼資料。未解鎖回傳 `423`。 |
 | `GET /api/vault/recovery` | 是 | 需要加密空間已解鎖；列出索引交易中斷的移入作業。比對來源檔案 SHA-256，回報原檔相符、已不存在、已變更或目前不可檢查；不會自行刪除來源。 |
 | `POST /api/vault/recovery/{objectId}` | 是 | JSON `{ "action": "complete"\|"keep" }`。`complete` 只會在來源仍於 NanakoData 且內容雜湊與已加密版本一致時移除來源；來源已不存在時只結束復原標記；來源已變更或權限不足時拒絕。`keep` 保留一般檔案與密文，只清除待確認標記。 |
 | `POST /api/vault/objects/import` | 是 | 需要加密空間已解鎖，且使用者對來源 Nanako 分享有讀寫權限；JSON `{ "shareId", "path" }`。只接受 NanakoData 中的一般檔案，串流加密並驗證後移除來源路徑；索引提交與來源移除由 SQLite 復原標記保護。若來源無法移除，回傳 `item.sourceRemovalPending: true`，應於解鎖後檢查復原清單。路徑外的檔案／磁碟不接受。 |
+| `GET /api/vault/objects/import/status` | 是 | 回報目前使用者加密移入的階段、已讀取位元組與來源大小。 |
+| `POST /api/vault/objects/import/cancel` | 是 | 取消尚未進入來源移除階段的加密移入；取消時保留來源並清理暫存密文。 |
 | `GET /api/vault/objects/{objectId}/content` | 是 | 需要已解鎖且該物件屬於目前使用者；只提供允許清單中的圖片／音訊／影片 MIME，支援單一 byte-range。每個被讀取區塊都需通過 GCM 驗證；不產生明文暫存檔。 |
-| `DELETE /api/vault/objects/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "永久刪除" }`；由伺服器再次驗證確認文字並永久刪除密文物件，不移至資源回收桶。 |
+| `GET /api/vault/trash` | 是 | 需要已解鎖；只列出目前使用者加密空間資源回收筒中的解密後名稱與必要資訊。 |
+| `DELETE /api/vault/objects/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "移至資源回收桶" }`；將密文物件標記為刪除，仍以密文保存在 NanakoData。 |
+| `POST /api/vault/trash/{objectId}/restore` | 是 | 需要加密空間已解鎖；還原該物件的索引狀態。 |
+| `DELETE /api/vault/trash/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "永久刪除" }`；明確確認後刪除索引、加密中繼資料 sidecar 與密文檔案。不承諾 SSD 安全抹除。 |
+| `GET /api/vault/backups` | 是 | 需要加密空間已解鎖；列出可驗證的加密備份及無法驗證的備份標示。 |
+| `POST /api/vault/backups` | 是 | 需要加密空間已解鎖；將索引、中繼資料、金鑰包覆資料及物件密文複製到 `NanakoData/.nanako-vault/{userId}/backups`；備份內容仍為密文。此為同一資料目錄內的還原點，不是異地備份。 |
+| `POST /api/vault/backups/{backupId}/restore` | 是 | 需要加密空間已解鎖；先驗證備份清單、雜湊與物件認證，再補回缺少的加密物件；現有物件不覆寫。 |
+| `DELETE /api/vault/backups/{backupId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "刪除備份" }`；刪除指定 NanakoData 內的備份。 |
+| `POST /api/vault/orphans/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "永久刪除孤兒密文" }`；只能清理未被索引引用的密文／sidecar／暫存檔，索引重複檢查後才會執行。 |
 | `POST /api/duplicates/scan` | 是 | 需有分享資料夾讀取權限；JSON `{ "shareId" }`；以非同步工作掃描 Nanako 管理範圍，回傳 `202` 與 `scanId`。每次最多檢查 100,000 個項目；同一位使用者同時僅可執行一項掃描。 |
 | `GET /api/duplicates/scan?scanId=…` | 是 | 僅掃描建立者且仍有讀取權限者可讀取進度／結果；回傳狀態、進度、統計與已驗證重複群組。 |
 | `DELETE /api/duplicates/scan?scanId=…` | 是 | 僅掃描建立者可取消進行中的掃描。 |
@@ -74,7 +89,7 @@
 
 紀錄包含時間、使用者、操作、必要的目標名稱／相對路徑與成功／失敗結果；不儲存密碼、工作階段權杖或檔案內容。背景輪詢與影音播放的逐段 HTTP Range 請求不各自重複寫入。系統於啟動、每小時、調整期限及讀取紀錄時清除逾期資料。手動刪除須於 Nanako 防呆視窗輸入「刪除所有紀錄」，伺服器也會再次驗證確認文字；為確實清空，清除動作本身不會留在已刪除的紀錄中。
 
-ZIP 使用單一 `zip.js` 套件串流建立／解壓；每次操作最多 10,000 個項目、解壓後 20 GiB，並拒絕壓縮比大於 1,000 的大型項目。失敗時會移除 Nanako 暫存檔。此功能已通過本機小型整合測試；Windows 檔案總管互通性、大檔案記憶體量測、取消與多種損毀 ZIP 測試仍待完成。ZIP 不提供加密或密碼保護，也不會處理未來加密空間中的物件。
+ZIP 使用單一 `zip.js` 套件串流建立／解壓；每次操作最多 10,000 個項目、解壓後 20 GiB，並拒絕壓縮比大於 1,000 的大型項目。支援工作階段進度與取消，失敗／取消時會移除 Nanako 暫存檔；測試包含 CRC 損毀拒絕、32 MiB 串流記憶體量測及 PowerShell `Compress-Archive`／`Expand-Archive` 互通。ZIP 不提供加密或密碼保護，也不處理加密空間物件。
 
 複製操作採串流，不會把整個檔案讀入記憶體；複製資料夾時先量測項目數／檔案大小並檢查磁碟可用空間，再複製至同一目的資料夾下的隱藏暫存項目，成功後重新命名為正式項目，失敗時清理暫存。單次最多 100,000 個項目；介面目前逐項執行批次操作並回報部分成功，尚未提供進度、取消或大型資料夾的效能／記憶體量測。
 

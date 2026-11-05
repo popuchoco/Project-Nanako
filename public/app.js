@@ -9,6 +9,8 @@ const state = {
   selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null, fileLoadSequence: 0,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
   vaultSourceShareId: '', vaultSourcePath: '', vaultSourceItems: [], vaultItems: [], vaultPendingImport: null, vaultPendingDelete: null, vaultPreviewId: '', vaultLockRequest: null, vaultStatusTimer: null,
+  vaultRecoveryCodePending: false, vaultImportRunning: false, vaultImportPollTimer: null,
+  archiveRunning: false, archiveProgressTimer: null,
   windows: new Map(), windowZ: 10, desktopClockTimer: null,
 };
 const appDefinitions = {
@@ -696,12 +698,39 @@ function joinedPath(name) { return state.path ? `${state.path}/${name}` : name; 
 async function runArchiveAction(name, operation, button) {
   const label = operation === 'create' ? '壓縮 ZIP' : '解壓縮';
   button.disabled = true;
+  state.archiveRunning = true;
+  $('#archive-progress-title').textContent = `${label}中`;
+  $('#archive-progress-bar').value = 0;
+  $('#archive-progress-message').textContent = '正在準備 Nanako 資料空間內的檔案清單…';
+  $('#archive-cancel').disabled = false; $('#archive-cancel').textContent = '取消作業';
+  $('#archive-progress-dialog').showModal();
+  clearInterval(state.archiveProgressTimer);
+  state.archiveProgressTimer = setInterval(() => { void refreshArchiveProgress(); }, 350);
+  void refreshArchiveProgress();
   try {
     const result = await api(`/api/archive/${operation}`, { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: joinedPath(name) }) });
+    $('#archive-progress-dialog').close();
     notify(operation === 'create' ? `已建立「${result.name}」。` : `已解壓縮至「${result.name}」。`);
     await loadFiles();
-  } catch (error) { notify(`${label}失敗：${error.message}`, true); }
-  finally { button.disabled = false; }
+  } catch (error) { if ($('#archive-progress-dialog').open) $('#archive-progress-dialog').close(); notify(`${label}失敗：${error.message}`, true); }
+  finally { clearInterval(state.archiveProgressTimer); state.archiveProgressTimer = null; state.archiveRunning = false; button.disabled = false; }
+}
+
+async function refreshArchiveProgress() {
+  try {
+    const job = await api('/api/archive/status');
+    if (!job.active) return;
+    const bar = $('#archive-progress-bar');
+    const percent = job.totalBytes > 0 ? Math.min(99, Math.floor(job.bytesRead * 100 / job.totalBytes))
+      : job.totalEntries > 0 ? Math.min(99, Math.floor(job.entriesDone * 100 / job.totalEntries)) : 0;
+    bar.value = percent;
+    $('#archive-progress-message').textContent = job.totalBytes > 0
+      ? `${job.phase} · ${formatSize(job.bytesRead)}／${formatSize(job.totalBytes)}（${percent}%） · 項目 ${job.entriesDone}/${job.totalEntries || '…'}`
+      : `${job.phase} · 項目 ${job.entriesDone}/${job.totalEntries || '…'}`;
+    const publishing = job.phase === '發佈 ZIP 成品' || job.phase === '發佈解壓內容';
+    $('#archive-cancel').disabled = publishing;
+    if (publishing) $('#archive-cancel').textContent = '即將完成';
+  } catch { /* The archive response remains authoritative if a poll briefly fails. */ }
 }
 
 function openFile(item) {
@@ -1105,14 +1134,35 @@ function clearVaultContents() {
   state.vaultPendingImport = null;
   state.vaultPendingDelete = null;
   $('#vault-object-list').replaceChildren();
+  $('#vault-trash-list').replaceChildren();
+  $('#vault-backup-list').replaceChildren();
   $('#vault-source-list').replaceChildren();
   $('#vault-recovery-list').replaceChildren();
+  $('#vault-orphan-list').replaceChildren();
   $('#vault-recovery-panel').hidden = true;
   $('#vault-recovery-truncated').hidden = true;
+  $('#vault-orphan-section').hidden = true;
+  $('#vault-orphan-truncated').hidden = true;
   $('#vault-object-empty').hidden = true;
+  $('#vault-trash-empty').hidden = true;
+  $('#vault-backup-empty').hidden = true;
   $('#vault-source-path').textContent = '主資料夾';
   $('#vault-import-description').textContent = '';
   $('#vault-delete-description').textContent = '';
+}
+
+function showVaultRecoveryCode(code) {
+  $('#vault-recovery-key-value').value = String(code || '').match(/.{1,4}/gu)?.join('-') || '';
+  $('#vault-recovery-key-panel').hidden = false;
+  state.vaultRecoveryCodePending = true;
+  setVaultMessage('復原金鑰已更新。請先保存並確認，再關閉此提示；離開畫面後無法再次檢視這組金鑰。');
+  $('#vault-recovery-key-value').focus();
+}
+
+function clearVaultRecoveryCode() {
+  $('#vault-recovery-key-value').value = '';
+  $('#vault-recovery-key-panel').hidden = true;
+  state.vaultRecoveryCodePending = false;
 }
 
 function vaultSourceLocation() {
@@ -1167,7 +1217,7 @@ async function loadVaultObjects() {
         const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'button secondary'; preview.textContent = '預覽／播放';
         preview.addEventListener('click', () => showVaultPreview(item)); group.append(preview);
       }
-      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '永久刪除';
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button secondary'; remove.textContent = '移至資源回收筒';
       remove.addEventListener('click', () => openVaultDelete(item)); group.append(remove);
       actions.append(group); row.append(name, size, actions); list.append(row);
     }
@@ -1175,10 +1225,79 @@ async function loadVaultObjects() {
   } catch (error) { setVaultMessage(error.message, true); }
 }
 
+async function loadVaultTrash() {
+  const list = $('#vault-trash-list'); list.replaceChildren();
+  try {
+    const result = await api('/api/vault/trash');
+    for (const item of result.items) {
+      const row = document.createElement('tr');
+      const name = document.createElement('td'); name.textContent = item.name;
+      const date = document.createElement('td'); date.textContent = formatDate(item.deletedAt);
+      const actions = document.createElement('td'); const group = document.createElement('div'); group.className = 'vault-row-actions';
+      const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'button secondary'; restore.textContent = '還原';
+      restore.addEventListener('click', async () => {
+        if (!confirm(`將「${item.name}」還原至已上鎖檔案？`)) return;
+        try {
+          await api(`/api/vault/trash/${encodeURIComponent(item.id)}/restore`, { method: 'POST', body: '{}' });
+          await Promise.all([loadVaultObjects(), loadVaultTrash()]); setVaultMessage('加密空間檔案已還原。');
+        } catch (error) { setVaultMessage(error.message, true); }
+      });
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '永久刪除';
+      remove.addEventListener('click', async () => {
+        if (prompt(`永久刪除「${item.name}」的密文？此動作無法復原。\n\n請輸入：永久刪除`) !== '永久刪除') return;
+        try {
+          await api(`/api/vault/trash/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '永久刪除' }) });
+          await loadVaultTrash(); setVaultMessage('已永久刪除加密空間檔案。');
+        } catch (error) { setVaultMessage(error.message, true); }
+      });
+      group.append(restore, remove); actions.append(group); row.append(name, date, actions); list.append(row);
+    }
+    $('#vault-trash-empty').hidden = result.items.length !== 0;
+  } catch (error) { $('#vault-trash-empty').hidden = false; $('#vault-trash-empty').textContent = error.message; }
+}
+
+async function loadVaultBackups() {
+  const list = $('#vault-backup-list'); list.replaceChildren();
+  try {
+    const result = await api('/api/vault/backups');
+    for (const item of result.items) {
+      const row = document.createElement('tr');
+      const date = document.createElement('td'); date.textContent = item.invalid ? '備份索引無法驗證' : formatDate(item.createdAt);
+      const count = document.createElement('td'); count.textContent = item.invalid ? '—' : `${item.itemCount} 個檔案`;
+      const size = document.createElement('td'); size.textContent = item.invalid ? '—' : formatSize(item.encryptedBytes);
+      const actions = document.createElement('td'); const group = document.createElement('div'); group.className = 'vault-row-actions';
+      if (!item.invalid) {
+        const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'button secondary'; restore.textContent = '還原缺少檔案';
+        restore.addEventListener('click', async () => {
+          if (!confirm(`使用此備份還原目前加密空間缺少的檔案？已存在的物件不會覆寫。`)) return;
+          try {
+            const restored = await api(`/api/vault/backups/${encodeURIComponent(item.id)}/restore`, { method: 'POST', body: '{}' });
+            await Promise.all([loadVaultObjects(), loadVaultTrash(), loadVaultRecovery()]);
+            setVaultMessage(`備份還原完成：新增 ${restored.restored} 個，略過 ${restored.skipped} 個既有檔案。`);
+          } catch (error) { setVaultMessage(error.message, true); }
+        });
+        group.append(restore);
+      }
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '刪除備份';
+      remove.addEventListener('click', async () => {
+        if (prompt('刪除此 NanakoData 內的加密備份？此動作無法復原。\n\n請輸入：刪除備份') !== '刪除備份') return;
+        try {
+          await api(`/api/vault/backups/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '刪除備份' }) });
+          await loadVaultBackups(); setVaultMessage('加密備份已刪除。');
+        } catch (error) { setVaultMessage(error.message, true); }
+      });
+      group.append(remove); actions.append(group); row.append(date, count, size, actions); list.append(row);
+    }
+    $('#vault-backup-empty').hidden = result.items.length !== 0;
+  } catch (error) { $('#vault-backup-empty').hidden = false; $('#vault-backup-empty').textContent = error.message; }
+}
+
 async function loadVaultRecovery() {
   const panel = $('#vault-recovery-panel');
   const list = $('#vault-recovery-list');
+  const orphanList = $('#vault-orphan-list');
   list.replaceChildren();
+  orphanList.replaceChildren();
   try {
     const result = await api('/api/vault/recovery');
     $('#vault-recovery-truncated').hidden = !result.truncated;
@@ -1207,8 +1326,44 @@ async function loadVaultRecovery() {
       keep.addEventListener('click', () => resolveVaultRecovery(item, 'keep'));
       actions.append(keep); card.append(details, actions); list.append(card);
     }
-    panel.hidden = result.items.length === 0 && !result.truncated;
+    for (const item of result.orphans || []) {
+      const card = document.createElement('article'); card.className = 'vault-recovery-item';
+      const details = document.createElement('div');
+      const title = document.createElement('strong'); title.textContent = '未編入索引的加密檔案';
+      const description = document.createElement('p'); description.textContent = `識別碼 ${item.id.slice(0, 8)}… · ${formatSize(item.encryptedBytes)} · 無法還原檔名`;
+      details.append(title, description);
+      const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'button danger'; discard.textContent = '清理孤兒密文';
+      discard.addEventListener('click', () => discardVaultOrphan(item));
+      const actions = document.createElement('div'); actions.className = 'vault-row-actions'; actions.append(discard);
+      card.append(details, actions); orphanList.append(card);
+    }
+    $('#vault-orphan-section').hidden = !(result.orphans || []).length && !result.orphansTruncated;
+    $('#vault-orphan-truncated').hidden = !result.orphansTruncated;
+    panel.hidden = result.items.length === 0 && !result.truncated && !(result.orphans || []).length && !result.orphansTruncated;
   } catch (error) { panel.hidden = true; setVaultMessage(error.message, true); }
+}
+
+async function discardVaultOrphan(item) {
+  const confirmation = prompt(`這筆密文無法還原檔名或驗證內容。確認只清除加密空間中的孤兒密文，不會刪除 Nanako 資料空間中的任何來源檔案。\n\n請輸入：永久刪除孤兒密文\n識別碼：${item.id}`);
+  if (confirmation !== '永久刪除孤兒密文') return;
+  try {
+    await api(`/api/vault/orphans/${encodeURIComponent(item.id)}`, { method: 'POST', body: JSON.stringify({ confirmText: confirmation }) });
+    await loadVaultRecovery(); setVaultMessage('未編入索引的加密暫存資料已清理；來源資料空間未變更。');
+  } catch (error) { setVaultMessage(error.message, true); await loadVaultRecovery(); }
+}
+
+async function refreshVaultImportProgress() {
+  try {
+    const progress = await api('/api/vault/objects/import/status');
+    if (!progress.active) return;
+    const bar = $('#vault-import-progress'); bar.hidden = false;
+    const percent = progress.totalBytes > 0 ? Math.min(99, Math.floor(progress.bytesRead * 100 / progress.totalBytes)) : 10;
+    bar.value = percent;
+    $('#cancel-vault-import').disabled = progress.phase === '移除已驗證來源';
+    const message = $('#vault-import-message');
+    message.textContent = `${progress.phase} · ${formatSize(progress.bytesRead)}／${formatSize(progress.totalBytes)}（${percent}%）`;
+    message.hidden = false; message.classList.remove('error');
+  } catch { /* The import response remains authoritative if progress polling briefly fails. */ }
 }
 
 async function resolveVaultRecovery(item, action) {
@@ -1264,7 +1419,7 @@ function openVaultImport(item) {
 
 function openVaultDelete(item) {
   state.vaultPendingDelete = item;
-  $('#vault-delete-description').textContent = `確定要永久刪除「${item.name}」的加密內容？此操作不會移至資源回收桶。`;
+  $('#vault-delete-description').textContent = `將「${item.name}」移至加密空間資源回收筒。密文會繼續保留，可稍後還原或永久刪除。`;
   $('#vault-delete-confirm').value = ''; $('#confirm-vault-delete').disabled = true;
   $('#vault-delete-message').hidden = true; $('#vault-delete-message').textContent = '';
   $('#vault-delete-dialog').showModal(); $('#vault-delete-confirm').focus();
@@ -1276,7 +1431,7 @@ async function loadVault() {
     if (state.vaultLockRequest) await state.vaultLockRequest;
     const status = await api('/api/vault/status');
     renderVaultStatus(status);
-    if (status.unlocked) await Promise.all([loadVaultObjects(), loadVaultSource(), loadVaultRecovery()]);
+    if (status.unlocked) await Promise.all([loadVaultObjects(), loadVaultTrash(), loadVaultBackups(), loadVaultSource(), loadVaultRecovery()]);
     clearInterval(state.vaultStatusTimer);
     state.vaultStatusTimer = setInterval(() => {
       void api('/api/vault/status').then(renderVaultStatus).catch(() => renderVaultStatus({ configured: true, unlocked: false }));
@@ -1981,6 +2136,13 @@ $('#select-all-files').addEventListener('change', (event) => {
 $('#batch-move').addEventListener('click', () => batchFileOperation('move'));
 $('#batch-copy').addEventListener('click', () => batchFileOperation('copy'));
 $('#batch-delete').addEventListener('click', batchDeleteItems);
+$('#archive-cancel').addEventListener('click', async () => {
+  if (!state.archiveRunning) return;
+  const button = $('#archive-cancel'); button.disabled = true; button.textContent = '取消中…';
+  $('#archive-progress-message').textContent = '正在取消 ZIP 作業並清除暫存項目；來源檔案不會變更。';
+  try { await api('/api/archive/cancel', { method: 'POST', body: '{}' }); }
+  catch (error) { $('#archive-progress-message').textContent = error.message; button.disabled = false; button.textContent = '取消作業'; }
+});
 $('#file-input').addEventListener('change', async (event) => { const files = [...event.target.files]; for (const file of files) { const query = new URLSearchParams({ shareId: state.shareId, path: state.path, name: file.name }); try { await api(`/api/upload?${query}`, { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' } }); } catch (error) { notify(`${file.name}：${error.message}`, true); } } event.target.value = ''; loadFiles(); });
 $('#vault-setup-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1988,8 +2150,9 @@ $('#vault-setup-form').addEventListener('submit', async (event) => {
   if (password !== values.get('confirmPassword')) { setVaultMessage('兩次輸入的加密空間密碼不一致。', true); return; }
   const button = form.querySelector('[type="submit"]'); button.disabled = true;
   try {
-    await api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ password }) });
-    form.reset(); await loadVault(); setVaultMessage('已建立加密空間。請妥善保管加密空間密碼；目前沒有復原方式。');
+    const result = await api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ password }) });
+    form.reset(); showVaultRecoveryCode(result.recoveryCode); await loadVault();
+    setVaultMessage('加密空間已建立。請立即將復原金鑰保存至 Nanako 資料空間以外的安全位置。');
   } catch (error) { setVaultMessage(error.message, true); }
   finally { button.disabled = false; }
 });
@@ -2003,19 +2166,77 @@ $('#vault-unlock-form').addEventListener('submit', async (event) => {
   finally { button.disabled = false; }
 });
 $('#vault-lock-button').addEventListener('click', lockVaultFromUi);
+$('#vault-recover-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const button = form.querySelector('[type="submit"]'); button.disabled = true;
+  try {
+    await api('/api/vault/recover', { method: 'POST', body: JSON.stringify({ recoveryCode: values.get('recoveryCode') }) });
+    form.reset(); $('#vault-unlock-form').reset(); await loadVault(); setVaultMessage('已使用復原金鑰解鎖。若忘記原密碼，可在「已解鎖」區段設定新密碼；請一併妥善保存復原金鑰。');
+  } catch (error) { setVaultMessage(error.message, true); }
+  finally { button.disabled = false; }
+});
+$('#vault-password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const password = String(values.get('password') || '');
+  if (password !== values.get('confirmPassword')) { setVaultMessage('兩次輸入的加密空間密碼不一致。', true); return; }
+  const button = form.querySelector('[type="submit"]'); button.disabled = true;
+  try {
+    await api('/api/vault/password', { method: 'POST', body: JSON.stringify({ password }) });
+    form.reset(); setVaultMessage('加密空間密碼已更新。現有檔案未重新加密，復原金鑰仍有效。');
+  } catch (error) { setVaultMessage(error.message, true); }
+  finally { button.disabled = false; }
+});
+$('#vault-recovery-key-rotate').addEventListener('click', async () => {
+  if (state.vaultRecoveryCodePending && !confirm('重新產生會立即讓目前畫面上的舊復原金鑰失效。要繼續嗎？')) return;
+  try {
+    const result = await api('/api/vault/recovery-key', { method: 'POST', body: '{}' });
+    showVaultRecoveryCode(result.recoveryCode);
+  } catch (error) { setVaultMessage(error.message, true); }
+});
+$('#vault-recovery-key-copy').addEventListener('click', async () => {
+  const code = $('#vault-recovery-key-value').value;
+  try { await navigator.clipboard.writeText(code); setVaultMessage('復原金鑰已複製。請確認已貼到安全位置後再關閉提示。'); }
+  catch { $('#vault-recovery-key-value').select(); setVaultMessage('無法自動複製；已選取復原金鑰，請手動複製並保存。', true); }
+});
+$('#vault-recovery-key-saved').addEventListener('click', () => {
+  if (!confirm('確認已將復原金鑰保存到 Nanako 資料空間以外的安全位置？關閉後無法再次檢視這組金鑰。')) return;
+  clearVaultRecoveryCode(); setVaultMessage('已關閉復原金鑰提示；你仍可在加密空間解鎖後重新產生金鑰。');
+});
 $('#vault-source-share').addEventListener('change', (event) => { state.vaultSourceShareId = event.currentTarget.value; state.vaultSourcePath = ''; loadVaultSource(); });
 $('#vault-source-up').addEventListener('click', () => { state.vaultSourcePath = state.vaultSourcePath.split('/').slice(0, -1).join('/'); loadVaultSource(); });
 $('#vault-source-refresh').addEventListener('click', loadVaultSource);
 $('#vault-refresh').addEventListener('click', loadVaultObjects);
+$('#vault-trash-refresh').addEventListener('click', loadVaultTrash);
+$('#vault-backup-create').addEventListener('click', async () => {
+  const button = $('#vault-backup-create'); button.disabled = true; button.textContent = '建立中…';
+  try {
+    const result = await api('/api/vault/backups', { method: 'POST', body: '{}' });
+    await loadVaultBackups(); setVaultMessage(`已建立加密備份：${result.backup.itemCount} 個檔案，${formatSize(result.backup.encryptedBytes)}。備份仍位於 NanakoData。`);
+  } catch (error) { setVaultMessage(error.message, true); }
+  finally { button.disabled = false; button.textContent = '建立備份'; }
+});
 $('#vault-recovery-refresh').addEventListener('click', loadVaultRecovery);
 $('#vault-preview-close').addEventListener('click', clearVaultPreview);
 $('#vault-import-dialog').addEventListener('cancel', (event) => { if ($('#confirm-vault-import').disabled) event.preventDefault(); });
-$('#cancel-vault-import').addEventListener('click', () => { if (!$('#confirm-vault-import').disabled) { state.vaultPendingImport = null; $('#vault-import-dialog').close(); } });
+$('#cancel-vault-import').addEventListener('click', async () => {
+  if (state.vaultImportRunning) {
+    const cancel = $('#cancel-vault-import'); cancel.disabled = true; cancel.textContent = '取消中…';
+    const message = $('#vault-import-message'); message.textContent = '正在取消加密移入；來源檔案會保留。'; message.hidden = false;
+    try { await api('/api/vault/objects/import/cancel', { method: 'POST', body: '{}' }); }
+    catch (error) { message.textContent = error.message; message.classList.add('error'); }
+    return;
+  }
+  if (!$('#confirm-vault-import').disabled) { state.vaultPendingImport = null; $('#vault-import-dialog').close(); }
+});
 $('#vault-import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const item = state.vaultPendingImport; if (!item) return;
-  const button = $('#confirm-vault-import'); button.disabled = true; $('#cancel-vault-import').disabled = true; button.textContent = '加密驗證中…';
-  const status = $('#vault-import-message'); status.textContent = '檔案會以串流方式加密並驗證；完成前來源檔案不會移除。大型檔案可能需要一些時間。'; status.hidden = false; status.classList.remove('error');
+  const button = $('#confirm-vault-import'); button.disabled = true; $('#cancel-vault-import').disabled = false; $('#cancel-vault-import').textContent = '取消作業'; button.textContent = '加密驗證中…';
+  state.vaultImportRunning = true;
+  const bar = $('#vault-import-progress'); bar.value = 0; bar.hidden = false;
+  const status = $('#vault-import-message'); status.textContent = '檔案會以串流方式加密並驗證；完成前來源檔案不會移除。'; status.hidden = false; status.classList.remove('error');
+  clearInterval(state.vaultImportPollTimer); state.vaultImportPollTimer = setInterval(() => { void refreshVaultImportProgress(); }, 350);
+  void refreshVaultImportProgress();
   try {
     const result = await api('/api/vault/objects/import', { method: 'POST', body: JSON.stringify({ shareId: item.shareId, path: item.path }) });
     state.vaultPendingImport = null; $('#vault-import-dialog').close();
@@ -2025,20 +2246,24 @@ $('#vault-import-form').addEventListener('submit', async (event) => {
     await Promise.all([loadVaultObjects(), loadVaultSource(), loadVaultRecovery()]);
     if (state.shareId === item.shareId) loadFiles();
   } catch (error) { status.textContent = error.message; status.classList.add('error'); status.hidden = false; }
-  finally { button.disabled = false; $('#cancel-vault-import').disabled = false; button.textContent = '移入並加密'; }
+  finally {
+    clearInterval(state.vaultImportPollTimer); state.vaultImportPollTimer = null; state.vaultImportRunning = false;
+    button.disabled = false; $('#cancel-vault-import').disabled = false; $('#cancel-vault-import').textContent = '取消'; button.textContent = '移入並加密';
+    bar.hidden = true;
+  }
 });
-$('#vault-delete-confirm').addEventListener('input', (event) => { $('#confirm-vault-delete').disabled = event.currentTarget.value !== '永久刪除'; });
+$('#vault-delete-confirm').addEventListener('input', (event) => { $('#confirm-vault-delete').disabled = event.currentTarget.value !== '移至資源回收筒'; });
 $('#cancel-vault-delete').addEventListener('click', () => { state.vaultPendingDelete = null; $('#vault-delete-dialog').close(); });
 $('#vault-delete-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const item = state.vaultPendingDelete; if (!item) return;
   const button = $('#confirm-vault-delete'); button.disabled = true;
   try {
-    await api(`/api/vault/objects/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '永久刪除' }) });
+    await api(`/api/vault/objects/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '移至資源回收筒' }) });
     if (state.vaultPreviewId === item.id) clearVaultPreview();
-    state.vaultPendingDelete = null; $('#vault-delete-dialog').close(); await loadVaultObjects(); setVaultMessage('已永久刪除加密檔案。');
+    state.vaultPendingDelete = null; $('#vault-delete-dialog').close(); await Promise.all([loadVaultObjects(), loadVaultTrash()]); setVaultMessage('已移至加密空間資源回收筒。');
   } catch (error) { const message = $('#vault-delete-message'); message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
-  finally { button.disabled = $('#vault-delete-confirm').value !== '永久刪除'; }
+  finally { button.disabled = $('#vault-delete-confirm').value !== '移至資源回收筒'; }
 });
 $('#user-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const permissions = state.shares.flatMap((share) => { const read = event.currentTarget.elements[`read-${share.id}`].checked; const write = event.currentTarget.elements[`write-${share.id}`].checked; return read ? [{ shareId: share.id, canRead: read, canWrite: write }] : []; }); const message = $('#user-message'); try { await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) }); event.currentTarget.reset(); message.textContent = '使用者已建立。'; message.classList.remove('error'); message.hidden = false; loadUsers(); } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; } });
 

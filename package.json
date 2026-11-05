@@ -1,7 +1,7 @@
 {
   "name": "project-nanako",
   "description": "基於 Windows 的類 sandbox 仿 NAS 專案，以 Electron 延伸打造 Nanako 視窗內的桌面操作體驗與隨選隨用的本機檔案空間。",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MPL-2.0",
   "private": true,
   "type": "module",

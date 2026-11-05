@@ -167,14 +167,19 @@
 
       <section id="view-vault" class="view-panel" hidden>
         <div class="content-heading"><div><h2>加密空間</h2><p class="muted">每個 Nanako 帳號各自持有金鑰；管理員不能代替其他帳號解鎖。</p></div><button id="vault-lock-button" class="button secondary" type="button" hidden>立即鎖定</button></div>
-        <div class="notice vault-prototype-notice"><strong>加密空間仍為原型，尚未完成獨立安全審查與復原流程</strong><p>移入會先驗證密文，再移除 Nanako 資料空間中的原檔；原始磁碟區塊是否能被復原，取決於檔案系統與儲存裝置，本功能不保證安全抹除。請勿放入唯一副本或實際機密資料。</p></div>
+        <div class="notice vault-prototype-notice"><strong>加密空間仍為原型，尚未完成獨立安全審查</strong><p>移入會先驗證密文，再移除 Nanako 資料空間中的原檔；原始磁碟區塊是否能被復原，取決於檔案系統與儲存裝置，本功能不保證安全抹除。請妥善保存復原金鑰，並勿放入唯一副本或實際機密資料。</p></div>
         <section id="vault-setup-panel" class="card vault-form-panel" hidden>
-          <div><h3>建立個人金鑰</h3><p class="muted">請設定與 Nanako 登入密碼分開的加密空間密碼。忘記密碼時目前沒有復原方式。</p></div>
+          <div><h3>建立個人金鑰</h3><p class="muted">請設定與 Nanako 登入密碼分開的加密空間密碼。建立後會提供一次性復原金鑰，請離線保存。</p></div>
           <form id="vault-setup-form" class="form-stack">
             <label>加密空間密碼<input id="vault-setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
             <label>再次輸入加密空間密碼<input id="vault-setup-confirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
             <button class="button primary" type="submit">建立加密空間</button>
           </form>
+        </section>
+        <section id="vault-recovery-key-panel" class="card vault-recovery-card" hidden>
+          <div><h3>請立即保存復原金鑰</h3><p class="muted">這組金鑰只會顯示這一次。請存放在 Nanako 資料空間以外的安全位置；遺失後無法由管理員或 Nanako 還原。任何取得金鑰的人都能解鎖此加密空間。</p></div>
+          <label>加密空間復原金鑰<textarea id="vault-recovery-key-value" rows="3" readonly spellcheck="false" autocomplete="off"></textarea></label>
+          <div class="vault-row-actions"><button id="vault-recovery-key-copy" class="button secondary" type="button">複製復原金鑰</button><button id="vault-recovery-key-saved" class="button primary" type="button">我已妥善保存</button></div>
         </section>
         <section id="vault-unlock-panel" class="card vault-form-panel" hidden>
           <div><h3>加密空間已鎖定</h3><p class="muted">金鑰只會暫存在 Nanako 程序記憶體；手動鎖定、登出、閒置 15 分鐘或重新啟動後會鎖定。</p></div>
@@ -182,15 +187,17 @@
             <label>加密空間密碼<input id="vault-unlock-password" name="password" type="password" autocomplete="current-password" minlength="12" maxlength="256" required></label>
             <button class="button primary" type="submit">解鎖加密空間</button>
           </form>
+          <details class="vault-recovery-unlock"><summary>改用復原金鑰解鎖</summary><form id="vault-recover-form" class="form-stack"><label>復原金鑰<textarea name="recoveryCode" rows="3" maxlength="80" autocomplete="off" spellcheck="false" required></textarea></label><button class="button secondary" type="submit">使用復原金鑰</button></form></details>
         </section>
         <section id="vault-open-panel" class="card vault-open-panel" hidden>
-          <span class="vault-open-mark" aria-hidden="true">✓</span><div><h3>加密空間已解鎖</h3><p class="muted">目前解鎖的是這個本機帳號的加密空間。關閉視窗、手動鎖定或登出會清除金鑰參照。</p></div>
+          <span class="vault-open-mark" aria-hidden="true">✓</span><div><h3>加密空間已解鎖</h3><p class="muted">目前解鎖的是這個本機帳號的加密空間。關閉視窗、手動鎖定或登出會清除金鑰參照。</p><button id="vault-recovery-key-rotate" class="button secondary" type="button">重新產生復原金鑰</button><details class="vault-recovery-unlock"><summary>變更加密空間密碼</summary><form id="vault-password-form" class="form-stack"><label>新加密空間密碼<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label><label>再次輸入新密碼<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label><button class="button secondary" type="submit">更新密碼</button></form></details></div>
         </section>
         <section id="vault-content-panel" class="vault-content-panel" hidden>
           <section id="vault-recovery-panel" class="card vault-recovery-card" hidden>
             <div class="content-heading"><div><h3>未完成的移入作業</h3><p class="muted">Nanako 上次可能在完成移入前關閉。請檢查來源檔案狀態，再選擇完成上鎖或保留原檔。</p></div><button id="vault-recovery-refresh" class="button secondary" type="button">重新檢查</button></div>
             <div id="vault-recovery-list" class="vault-recovery-list"></div>
             <p id="vault-recovery-truncated" class="inline-message" hidden>待處理作業超過畫面上限，請完成或保留目前項目後重新整理。</p>
+            <section id="vault-orphan-section" hidden><h4>未編入索引的加密資料</h4><p class="muted">Nanako 無法驗證這些密文的檔名或內容；不會自動刪除。若來源仍在 Nanako 資料空間，可重新匯入；否則可在確認後清理孤兒密文。</p><div id="vault-orphan-list" class="vault-recovery-list"></div><p id="vault-orphan-truncated" class="inline-message" hidden>孤兒密文超過畫面上限，請分批清理後重新整理。</p></section>
           </section>
           <section class="card vault-browser-card">
             <div class="content-heading"><div><h3>從 Nanako 資料空間移入</h3><p class="muted">只能選擇 NanakoData 內已管理的檔案；移入完成後會移除原始檔案路徑。</p></div></div>
@@ -200,14 +207,17 @@
           <section class="card vault-browser-card">
             <div class="content-heading"><div><h3>已上鎖檔案</h3><p class="muted">名稱及索引內容以加密方式儲存；支援格式可在 Nanako 視窗內預覽或播放。</p></div><button id="vault-refresh" class="button secondary" type="button">重新整理</button></div>
             <div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-object-list"></tbody></table><p id="vault-object-empty" class="empty-state" hidden>加密空間目前沒有檔案。</p></div>
+            <section class="vault-trash-section"><div class="content-heading"><div><h3>加密空間資源回收筒</h3><p class="muted">移入資源回收筒的檔案仍以密文保存；可還原或明確永久刪除。</p></div><button id="vault-trash-refresh" class="button secondary" type="button">重新整理</button></div><div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">移除時間</th><th scope="col">操作</th></tr></thead><tbody id="vault-trash-list"></tbody></table><p id="vault-trash-empty" class="empty-state" hidden>加密空間資源回收筒是空的。</p></div></section>
+            <section class="vault-trash-section"><div class="content-heading"><div><h3>加密備份</h3><p class="muted">備份以密文存放在 NanakoData，包含檔案本體與加密索引；此為同一資料目錄內的還原點，不是異地備份。</p></div><button id="vault-backup-create" class="button primary" type="button">建立備份</button></div><div class="table-wrap"><table><thead><tr><th scope="col">建立時間</th><th scope="col">檔案數</th><th scope="col">密文大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-backup-list"></tbody></table><p id="vault-backup-empty" class="empty-state" hidden>尚未建立加密備份。</p></div></section>
             <section id="vault-preview-panel" class="vault-preview-panel" hidden><div class="content-heading"><h3 id="vault-preview-title">檔案預覽</h3><button id="vault-preview-close" class="button secondary" type="button">關閉預覽</button></div><div id="vault-preview-content" class="vault-preview-content"></div><p id="vault-preview-message" class="inline-message" role="status" hidden></p></section>
           </section>
         </section>
         <p id="vault-message" class="inline-message" role="status" aria-live="polite" hidden></p>
       </section>
 
-      <dialog id="vault-import-dialog" class="confirmation-dialog"><form id="vault-import-form" class="form-stack"><h2>移入並加密檔案</h2><p id="vault-import-description" class="muted"></p><p class="notice">驗證完成後，Nanako 會移除一般資料夾中的原始檔案。請先確認已備份重要資料；磁碟不保證能安全抹除舊資料區塊。</p><p id="vault-import-message" class="inline-message" role="status" hidden></p><div class="dialog-actions"><button id="cancel-vault-import" class="button secondary" type="button">取消</button><button id="confirm-vault-import" class="button primary" type="submit">移入並加密</button></div></form></dialog>
-      <dialog id="vault-delete-dialog" class="confirmation-dialog"><form id="vault-delete-form" class="form-stack"><h2>永久刪除加密檔案</h2><p id="vault-delete-description" class="muted"></p><label>輸入「永久刪除」確認<input id="vault-delete-confirm" autocomplete="off" required></label><p id="vault-delete-message" class="inline-message" role="status" hidden></p><div class="dialog-actions"><button id="cancel-vault-delete" class="button secondary" type="button">取消</button><button id="confirm-vault-delete" class="button danger" type="submit" disabled>永久刪除</button></div></form></dialog>
+      <dialog id="vault-import-dialog" class="confirmation-dialog"><form id="vault-import-form" class="form-stack"><h2>移入並加密檔案</h2><p id="vault-import-description" class="muted"></p><p class="notice">驗證完成後，Nanako 會移除一般資料夾中的原始檔案。請先確認已備份重要資料；磁碟不保證能安全抹除舊資料區塊。</p><progress id="vault-import-progress" max="100" value="0" aria-label="加密移入進度" hidden></progress><p id="vault-import-message" class="inline-message" role="status" aria-live="polite" hidden></p><div class="dialog-actions"><button id="cancel-vault-import" class="button secondary" type="button">取消</button><button id="confirm-vault-import" class="button primary" type="submit">移入並加密</button></div></form></dialog>
+      <dialog id="archive-progress-dialog" class="confirmation-dialog"><section class="form-stack"><h2 id="archive-progress-title">ZIP 作業</h2><progress id="archive-progress-bar" max="100" value="0" aria-label="ZIP 作業進度"></progress><p id="archive-progress-message" class="inline-message" role="status" aria-live="polite">正在準備…</p><div class="dialog-actions"><button id="archive-cancel" class="button secondary" type="button">取消作業</button></div></section></dialog>
+      <dialog id="vault-delete-dialog" class="confirmation-dialog"><form id="vault-delete-form" class="form-stack"><h2>移至加密空間資源回收筒</h2><p id="vault-delete-description" class="muted"></p><label>輸入「移至資源回收筒」確認<input id="vault-delete-confirm" autocomplete="off" required></label><p id="vault-delete-message" class="inline-message" role="status" hidden></p><div class="dialog-actions"><button id="cancel-vault-delete" class="button secondary" type="button">取消</button><button id="confirm-vault-delete" class="button danger" type="submit" disabled>移至資源回收筒</button></div></form></dialog>
 
       <section id="view-users" class="view-panel" hidden>
         <div class="content-heading"><div><h2>使用者與權限</h2><p class="muted">每個使用者都使用本機帳號；權限預設採拒絕。</p></div></div>

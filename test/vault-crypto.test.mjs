@@ -1,16 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { Readable, Writable } from 'node:stream';
 import {
   createVaultKeyEnvelope,
+  createVaultRecoveryCode,
+  createVaultRecoveryEnvelope,
   decryptVaultMetadata,
   decryptVaultStream,
   deriveVaultObjectKey,
   encryptVaultMetadata,
   encryptVaultStream,
   unlockVaultMasterKey,
+  unlockVaultWithRecoveryCode,
   VAULT_CHUNK_BYTES,
+  VAULT_FORMAT_VERSION,
 } from '../src/vault-crypto.mjs';
 
 const PASSWORD = 'nanako-vault-passphrase-2026';
@@ -51,6 +55,24 @@ test('vault key envelope rejects unsupported KDF parameters and malformed authen
   masterKey.fill(0);
 });
 
+test('vault recovery key is random, independently wraps the same master key, and binds to its user', async () => {
+  const userId = randomUUID();
+  const recoveryCode = createVaultRecoveryCode();
+  assert.match(recoveryCode, /^[a-f0-9]{64}$/u);
+  assert.notEqual(createVaultRecoveryCode(), recoveryCode);
+  const { masterKey } = await createVaultKeyEnvelope(PASSWORD, userId);
+  const recoveryEnvelope = await createVaultRecoveryEnvelope(recoveryCode, masterKey, userId);
+  const recovered = await unlockVaultWithRecoveryCode(recoveryEnvelope, recoveryCode, userId);
+  assert.deepEqual(recovered, masterKey);
+  await assert.rejects(unlockVaultWithRecoveryCode(recoveryEnvelope, createVaultRecoveryCode(), userId), { code: 'vault_recovery_failed' });
+  await assert.rejects(unlockVaultWithRecoveryCode(recoveryEnvelope, recoveryCode, randomUUID()), { code: 'vault_recovery_failed' });
+  await assert.rejects(unlockVaultWithRecoveryCode(recoveryEnvelope, 'not-a-recovery-key', userId), { code: 'invalid_recovery_code' });
+  const formattedCode = recoveryCode.match(/.{1,4}/gu).join('-');
+  const formattedRecovered = await unlockVaultWithRecoveryCode(recoveryEnvelope, formattedCode, userId);
+  assert.deepEqual(formattedRecovered, masterKey);
+  masterKey.fill(0); recovered.fill(0); formattedRecovered.fill(0);
+});
+
 test('vault object keys and metadata are separated by user and opaque object ID', async () => {
   const userId = randomUUID();
   const objectId = randomUUID();
@@ -78,6 +100,32 @@ test('vault object stream encrypts multiple bounded chunks and round-trips binar
   assert.equal(result.plaintextBytes, plaintext.length);
   assert.equal(result.chunks, 3);
   assert.deepEqual(await decryptBuffer(bytes, key, objectId), plaintext);
+  key.fill(0);
+});
+
+test('vault decoder preserves compatibility with prior 1 MiB v1 records', async () => {
+  const key = randomBytes(32);
+  const objectId = randomUUID();
+  const prefix = randomBytes(4);
+  const plaintext = Buffer.alloc(1024 * 1024, 0x5a);
+  function record(value, counter) {
+    const nonce = Buffer.alloc(12);
+    prefix.copy(nonce);
+    nonce.writeBigUInt64BE(BigInt(counter), 4);
+    const fields = Buffer.alloc(16);
+    prefix.copy(fields);
+    fields.writeBigUInt64BE(BigInt(counter), 4);
+    fields.writeUInt32BE(value.length, 12);
+    const aad = Buffer.concat([Buffer.from(`Project Nanako vault object v${VAULT_FORMAT_VERSION}:${objectId}`), fields]);
+    const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
+    cipher.setAAD(aad);
+    const encrypted = Buffer.concat([cipher.update(value), cipher.final()]);
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(value.length);
+    return Buffer.concat([header, encrypted, cipher.getAuthTag()]);
+  }
+  const encoded = Buffer.concat([Buffer.from('NKVLT01\0', 'ascii'), prefix, record(plaintext, 0), record(Buffer.alloc(0), 1)]);
+  assert.deepEqual(await decryptBuffer(encoded, key, objectId), plaintext);
   key.fill(0);
 });
 

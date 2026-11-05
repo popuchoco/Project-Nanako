@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, lstat, readdir, rename, rm, stat, statfs, unlink } from 'node:fs/promises';
+import { mkdir, lstat, readFile, readdir, rename, rm, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -16,13 +16,25 @@ import { isShareOperationAllowed } from './share-access.mjs';
 import { hashManagedFile, scanManagedDuplicates } from './duplicates.mjs';
 import { searchManagedFiles } from './file-catalog.mjs';
 import {
+  copyVaultBackupObject,
+  createVaultBackup,
+  listVaultBackupDirectories,
+  readVaultBackup,
+  readVaultBackupSidecar,
+  validateVaultBackupObjects,
+} from './vault-backups.mjs';
+import {
   createVaultKeyEnvelope,
   decryptVaultMetadata,
   decryptVaultStream,
   deriveVaultObjectKey,
   encryptVaultMetadata,
   encryptVaultStream,
+  rewrapVaultMasterKey,
+  createVaultRecoveryCode,
+  createVaultRecoveryEnvelope,
   unlockVaultMasterKey,
+  unlockVaultWithRecoveryCode,
 } from './vault-crypto.mjs';
 
 const scrypt = promisify(crypto.scrypt);
@@ -323,11 +335,11 @@ function initDatabase(dataDir) {
     );
     CREATE TABLE IF NOT EXISTS vaults (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      envelope_json TEXT NOT NULL, created_at TEXT NOT NULL
+      envelope_json TEXT NOT NULL, recovery_json TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS vault_objects (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES vaults(user_id) ON DELETE CASCADE,
-      metadata_json TEXT NOT NULL
+      metadata_json TEXT NOT NULL, deleted_at TEXT
     );
     CREATE TABLE IF NOT EXISTS vault_pending_imports (
       object_id TEXT PRIMARY KEY REFERENCES vault_objects(id) ON DELETE CASCADE,
@@ -351,6 +363,10 @@ function initDatabase(dataDir) {
   `);
   const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
   if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+  const vaultColumns = new Set(db.prepare('PRAGMA table_info(vaults)').all().map((column) => column.name));
+  if (!vaultColumns.has('recovery_json')) db.exec('ALTER TABLE vaults ADD COLUMN recovery_json TEXT');
+  const vaultObjectColumns = new Set(db.prepare('PRAGMA table_info(vault_objects)').all().map((column) => column.name));
+  if (!vaultObjectColumns.has('deleted_at')) db.exec('ALTER TABLE vault_objects ADD COLUMN deleted_at TEXT');
   db.prepare('INSERT OR IGNORE INTO app_settings(setting_key, setting_value) VALUES(?, ?)')
     .run('audit_retention_days', String(DEFAULT_AUDIT_RETENTION_DAYS));
   const shareColumns = new Set(db.prepare('PRAGMA table_info(shares)').all().map((column) => column.name));
@@ -505,6 +521,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   const loginFailures = new Map();
   const vaultUnlockFailures = new Map();
   const unlockedVaultKeys = new Map();
+  const activeVaultImports = new Map();
+  const activeArchiveJobs = new Map();
   const activeVaultOperations = new Map();
   const pendingVaultLocks = new Set();
   const vaultLockWaiters = new Map();
@@ -567,6 +585,109 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       }
     }
   };
+  async function reconcileVaultOrphans(userId, masterKey, signal) {
+    const vaultRoot = path.join(dataDir, '.nanako-vault');
+    const directory = path.join(vaultRoot, userId);
+    const directoryInfo = await lstat(directory).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+    if (!directoryInfo) return;
+    if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) throw fail(500, 'vault_storage_invalid', '加密空間儲存目錄不安全；已停止復原。');
+    const entries = await readdir(directory, { withFileTypes: true });
+    const candidates = new Set();
+    for (const entry of entries) {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.nkm$/iu.exec(entry.name);
+      if (match && entry.isFile()) candidates.add(match[1].toLowerCase());
+    }
+    for (const objectId of candidates) {
+      if (signal.aborted) throw fail(499, 'vault_recovery_cancelled', '加密空間鎖定已取消孤兒檔案核對。');
+      const objectPath = path.join(directory, `${objectId}.nkv`);
+      const temporaryPath = `${objectPath}.tmp`;
+      const metadataPath = path.join(directory, `${objectId}.nkm`);
+      const metadataTemporaryPath = `${metadataPath}.tmp`;
+      await withPathLocks([objectPath, temporaryPath, metadataPath, metadataTemporaryPath], async () => {
+        if (db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, userId)) return;
+        try {
+          for (const target of [objectPath, temporaryPath, metadataPath]) await rejectSymlinkTraversal(dataDir, vaultRoot, target);
+          const sidecarInfo = await lstat(metadataPath);
+          if (!sidecarInfo.isFile() || sidecarInfo.isSymbolicLink() || sidecarInfo.size > 96 * 1024) return;
+          const envelope = JSON.parse(await readFile(metadataPath, 'utf8'));
+          const metadata = decryptVaultMetadata(envelope, masterKey, userId, objectId);
+          if (typeof metadata.name !== 'string' || !Number.isSafeInteger(metadata.size) || metadata.size < 0
+            || typeof metadata.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(metadata.sourceDigest)) return;
+          let contentPath = objectPath;
+          let contentInfo = await lstat(objectPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+          if (!contentInfo) {
+            contentPath = temporaryPath;
+            contentInfo = await lstat(temporaryPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+          }
+          if (!contentInfo?.isFile() || contentInfo.isSymbolicLink()) return;
+          const objectKey = deriveVaultObjectKey(masterKey, userId, objectId);
+          const digest = crypto.createHash('sha256');
+          let size = 0;
+          try {
+            for await (const chunk of decryptVaultStream(createReadStream(contentPath, { signal }), { key: objectKey, objectId })) {
+              digest.update(chunk); size += chunk.length;
+            }
+          } finally { objectKey.fill(0); }
+          if (size !== metadata.size || digest.digest('hex') !== metadata.sourceDigest) return;
+          if (contentPath === temporaryPath) await rename(temporaryPath, objectPath);
+          await rm(metadataTemporaryPath, { force: true }).catch(() => {});
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            db.prepare('INSERT INTO vault_objects(id, user_id, metadata_json) VALUES(?,?,?)').run(objectId, userId, JSON.stringify(envelope));
+            db.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)')
+              .run(objectId, userId, new Date().toISOString());
+            db.exec('COMMIT');
+          } catch (error) {
+            try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
+            throw error;
+          }
+        } catch (error) {
+          if (signal.aborted) throw fail(499, 'vault_recovery_cancelled', '加密空間鎖定已取消孤兒檔案核對。');
+          if (['ENOENT', 'EISDIR', 'ENOTDIR', 'ELOOP', 'invalid_vault_config', 'vault_integrity_failed'].includes(error.code)) return;
+          throw error;
+        }
+      });
+    }
+    const afterReconcile = await readdir(directory, { withFileTypes: true });
+    const incompleteIds = new Set(afterReconcile.flatMap((entry) => {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.nk[vm]\.tmp$/iu.exec(entry.name);
+      return match && entry.isFile() ? [match[1].toLowerCase()] : [];
+    }));
+    for (const objectId of incompleteIds) {
+      const objectPath = path.join(directory, `${objectId}.nkv`);
+      const temporaryPath = `${objectPath}.tmp`;
+      const metadataPath = path.join(directory, `${objectId}.nkm`);
+      const metadataTemporaryPath = `${metadataPath}.tmp`;
+      await withPathLocks([objectPath, temporaryPath, metadataPath, metadataTemporaryPath], async () => {
+        if (db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, userId)) return;
+        const finalMetadata = await lstat(metadataPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+        if (finalMetadata) return;
+        for (const target of [temporaryPath, metadataTemporaryPath]) {
+          await rejectSymlinkTraversal(dataDir, vaultRoot, target);
+          const info = await lstat(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+          if (info?.isSymbolicLink() || (info && !info.isFile())) throw fail(500, 'vault_storage_invalid', '加密空間暫存檔案不安全；已停止清理。');
+          if (info) await rm(target, { force: true });
+        }
+      });
+    }
+  }
+  async function listVaultOrphans(userId) {
+    const directory = path.join(dataDir, '.nanako-vault', userId);
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error) => error.code === 'ENOENT' ? [] : Promise.reject(error));
+    const indexed = new Set(db.prepare('SELECT id FROM vault_objects WHERE user_id = ?').all(userId).map((row) => row.id));
+    const found = new Map();
+    for (const entry of entries) {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.nkv(?:\.tmp)?$/iu.exec(entry.name);
+      if (!match || !entry.isFile()) continue;
+      const id = match[1].toLowerCase();
+      if (indexed.has(id)) continue;
+      const fullPath = path.join(directory, entry.name);
+      await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), fullPath);
+      const info = await lstat(fullPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+      if (info?.isFile() && !info.isSymbolicLink()) found.set(id, { id, encryptedBytes: info.size });
+    }
+    return [...found.values()].sort((left, right) => left.id.localeCompare(right.id));
+  }
   const vaultAttemptKey = (req, user) => `${req.socket.remoteAddress || 'local'}\0${user.id}`;
   function assertVaultUnlockAllowed(key, now = Date.now()) {
     if (vaultUnlockFailures.size > 2048) {
@@ -624,15 +745,28 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'GET' && route === '/api/users') return { action: '檢視使用者清單', target: '使用者與權限' };
     if (method === 'POST' && route === '/api/archive/create') return { action: '建立 ZIP 壓縮檔', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/archive/extract') return { action: '解壓縮 ZIP 檔案', target: target(url.searchParams.get('path')) };
+    if (method === 'POST' && route === '/api/archive/cancel') return { action: '取消 ZIP 作業', target: 'ZIP 壓縮或解壓縮' };
     if (method === 'POST' && route === '/api/vault/setup') return { action: '建立加密空間', target: '加密空間原型' };
     if (method === 'POST' && route === '/api/vault/unlock') return { action: '解鎖加密空間', target: '加密空間原型' };
+    if (method === 'POST' && route === '/api/vault/recover') return { action: '使用復原金鑰解鎖加密空間', target: '加密空間原型' };
+    if (method === 'POST' && route === '/api/vault/recovery-key') return { action: '重新產生加密空間復原金鑰', target: '加密空間原型' };
+    if (method === 'POST' && route === '/api/vault/password') return { action: '更新加密空間密碼', target: '加密空間原型' };
     if (method === 'POST' && route === '/api/vault/lock') return { action: '鎖定加密空間', target: '加密空間原型' };
     if (method === 'GET' && route === '/api/vault/objects') return { action: '檢視加密空間檔案', target: '加密空間' };
+    if (method === 'GET' && route === '/api/vault/trash') return { action: '檢視加密空間資源回收筒', target: '加密空間資源回收筒' };
+    if (method === 'GET' && route === '/api/vault/backups') return { action: '檢視加密空間備份', target: '加密空間備份' };
+    if (method === 'POST' && route === '/api/vault/backups') return { action: '建立加密空間備份', target: '加密空間備份' };
+    if (method === 'POST' && /^\/api\/vault\/backups\/[0-9a-f-]{36}\/restore$/iu.test(route)) return { action: '還原加密空間備份', target: '加密空間' };
+    if (method === 'DELETE' && /^\/api\/vault\/backups\/[0-9a-f-]{36}$/iu.test(route)) return { action: '刪除加密空間備份', target: '加密空間備份' };
     if (method === 'GET' && route === '/api/vault/recovery') return { action: '檢視加密空間復原狀態', target: '待確認移入作業' };
     if (method === 'POST' && route === '/api/vault/objects/import') return { action: '移入並加密檔案', target: '加密空間' };
+    if (method === 'POST' && route === '/api/vault/objects/import/cancel') return { action: '取消加密移入', target: '加密空間移入作業' };
     if (method === 'POST' && /^\/api\/vault\/recovery\/[0-9a-f-]{36}$/iu.test(route)) return { action: '處理加密空間復原', target: '待確認移入作業' };
+    if (method === 'POST' && /^\/api\/vault\/orphans\/[0-9a-f-]{36}$/iu.test(route)) return { action: '清理未索引加密檔案', target: '加密空間孤兒檔案' };
     if (method === 'GET' && /^\/api\/vault\/objects\/[0-9a-f-]{36}\/content$/iu.test(route)) return { action: '預覽加密檔案', target: '加密空間' };
-    if (method === 'DELETE' && /^\/api\/vault\/objects\/[0-9a-f-]{36}$/iu.test(route)) return { action: '永久刪除加密檔案', target: '加密空間' };
+    if (method === 'DELETE' && /^\/api\/vault\/objects\/[0-9a-f-]{36}$/iu.test(route)) return { action: '移至加密空間資源回收筒', target: '加密空間' };
+    if (method === 'POST' && /^\/api\/vault\/trash\/[0-9a-f-]{36}\/restore$/iu.test(route)) return { action: '還原加密空間檔案', target: '加密空間資源回收筒' };
+    if (method === 'DELETE' && /^\/api\/vault\/trash\/[0-9a-f-]{36}$/iu.test(route)) return { action: '永久刪除加密空間檔案', target: '加密空間資源回收筒' };
     if (method === 'POST' && route === '/api/duplicates/scan') return { action: '開始重複檔案掃描', target: 'Nanako 資料空間' };
     if (method === 'DELETE' && route === '/api/duplicates/scan') return { action: '取消重複檔案掃描', target: 'Nanako 資料空間' };
     if (method === 'POST' && route === '/api/duplicates/cleanup') return { action: '整理重複檔案副本', target: 'Nanako 資源回收桶' };
@@ -851,19 +985,39 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const vault = db.prepare('SELECT user_id FROM vaults WHERE user_id = ?').get(user.id);
           return json(res, 200, { configured: Boolean(vault), unlocked: unlockedVaultKeys.has(user.id) });
         }
+        if (route === '/api/vault/objects/import/status' && method === 'GET') {
+          const active = activeVaultImports.get(user.id);
+          return json(res, 200, { active: Boolean(active), ...(active ? {
+            id: active.id, bytesRead: active.bytesRead, totalBytes: active.totalBytes, phase: active.phase,
+          } : {}) });
+        }
+        if (route === '/api/vault/objects/import/cancel' && method === 'POST') {
+          const active = activeVaultImports.get(user.id);
+          if (!active) return json(res, 200, { active: false });
+          if (active.phase === '移除已驗證來源') throw fail(409, 'vault_import_too_late_to_cancel', '來源移除階段已開始，無法安全取消；請等待作業完成。');
+          active.controller.abort();
+          return json(res, 200, { active: true, cancelling: true });
+        }
         if (route === '/api/vault/setup' && method === 'POST') {
           if (db.prepare('SELECT user_id FROM vaults WHERE user_id = ?').get(user.id)) throw fail(409, 'vault_already_setup', '這個帳號已建立加密空間。');
           const body = await readJson(req);
-          let created;
+          let created; let recoveryCode; let recoveryEnvelope;
           try { created = await createVaultKeyEnvelope(body.password, user.id); }
           catch (error) {
             if (error.code === 'invalid_vault_password') throw fail(400, error.code, error.message);
             throw error;
           }
           try {
+            recoveryCode = createVaultRecoveryCode();
+            recoveryEnvelope = await createVaultRecoveryEnvelope(recoveryCode, created.masterKey, user.id);
+          } catch (error) {
+            created.masterKey.fill(0);
+            throw error;
+          }
+          try {
             db.exec('BEGIN IMMEDIATE');
-            db.prepare('INSERT INTO vaults(user_id, envelope_json, created_at) VALUES(?,?,?)')
-              .run(user.id, JSON.stringify(created.envelope), new Date().toISOString());
+            db.prepare('INSERT INTO vaults(user_id, envelope_json, recovery_json, created_at) VALUES(?,?,?,?)')
+              .run(user.id, JSON.stringify(created.envelope), JSON.stringify(recoveryEnvelope), new Date().toISOString());
             db.exec('COMMIT');
             await lockVaultKey(user.id);
             setVaultKey(user.id, created.masterKey);
@@ -873,7 +1027,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             if (db.prepare('SELECT user_id FROM vaults WHERE user_id = ?').get(user.id)) throw fail(409, 'vault_already_setup', '這個帳號已建立加密空間。');
             throw error;
           }
-          return json(res, 201, { configured: true, unlocked: true });
+          return json(res, 201, { configured: true, unlocked: true, recoveryCode });
         }
         if (route === '/api/vault/unlock' && method === 'POST') {
           const attemptKey = vaultAttemptKey(req, user);
@@ -897,6 +1051,50 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           vaultUnlockFailures.delete(attemptKey);
           return json(res, 200, { configured: true, unlocked: true });
         }
+        if (route === '/api/vault/recover' && method === 'POST') {
+          const attemptKey = vaultAttemptKey(req, user);
+          assertVaultUnlockAllowed(attemptKey);
+          const row = db.prepare('SELECT recovery_json FROM vaults WHERE user_id = ?').get(user.id);
+          if (!row) throw fail(404, 'vault_not_setup', '這個帳號尚未建立加密空間。');
+          if (!row.recovery_json) throw fail(409, 'vault_recovery_unavailable', '這個加密空間尚未設定復原金鑰；請先使用加密空間密碼解鎖。');
+          const body = await readJson(req);
+          let masterKey;
+          try { masterKey = await unlockVaultWithRecoveryCode(JSON.parse(row.recovery_json), body.recoveryCode, user.id); }
+          catch (error) {
+            if (error.code === 'invalid_recovery_code') throw fail(400, error.code, error.message);
+            if (error.code === 'vault_recovery_failed') {
+              recordVaultUnlockFailure(attemptKey);
+              throw fail(401, error.code, error.message);
+            }
+            if (error.code === 'invalid_vault_config') throw fail(500, 'vault_config_corrupt', '加密空間復原金鑰資料已損毀或格式不支援。');
+            throw error;
+          }
+          await lockVaultKey(user.id);
+          setVaultKey(user.id, masterKey);
+          vaultUnlockFailures.delete(attemptKey);
+          return json(res, 200, { configured: true, unlocked: true });
+        }
+        if (route === '/api/vault/recovery-key' && method === 'POST') {
+          return await withVaultKey(user.id, async (masterKey) => {
+            const recoveryCode = createVaultRecoveryCode();
+            const recoveryEnvelope = await createVaultRecoveryEnvelope(recoveryCode, masterKey, user.id);
+            db.prepare('UPDATE vaults SET recovery_json = ? WHERE user_id = ?').run(JSON.stringify(recoveryEnvelope), user.id);
+            return json(res, 200, { recoveryCode });
+          });
+        }
+        if (route === '/api/vault/password' && method === 'POST') {
+          const body = await readJson(req);
+          return await withVaultKey(user.id, async (masterKey) => {
+            let envelope;
+            try { envelope = await rewrapVaultMasterKey(body.password, masterKey, user.id); }
+            catch (error) {
+              if (error.code === 'invalid_vault_password') throw fail(400, error.code, error.message);
+              throw error;
+            }
+            db.prepare('UPDATE vaults SET envelope_json = ? WHERE user_id = ?').run(JSON.stringify(envelope), user.id);
+            return json(res, 200, { ok: true });
+          });
+        }
         if (route === '/api/vault/lock' && method === 'POST') {
           await lockVaultKey(user.id);
           return json(res, 200, { configured: Boolean(db.prepare('SELECT user_id FROM vaults WHERE user_id = ?').get(user.id)), unlocked: false });
@@ -904,7 +1102,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
 
         if (route === '/api/vault/objects' && method === 'GET') {
           return await withVaultKey(user.id, (masterKey) => {
-            const rows = db.prepare('SELECT id, metadata_json FROM vault_objects WHERE user_id = ? ORDER BY id').all(user.id);
+            const rows = db.prepare('SELECT id, metadata_json FROM vault_objects WHERE user_id = ? AND deleted_at IS NULL ORDER BY id').all(user.id);
             const items = rows.map((row) => {
               let metadata;
               try { metadata = decryptVaultMetadata(JSON.parse(row.metadata_json), masterKey, user.id, row.id); }
@@ -917,8 +1115,121 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             return json(res, 200, { items });
           });
         }
+        if (route === '/api/vault/trash' && method === 'GET') {
+          return await withVaultKey(user.id, (masterKey) => {
+            const rows = db.prepare('SELECT id, metadata_json, deleted_at FROM vault_objects WHERE user_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC').all(user.id);
+            const items = rows.map((row) => {
+              let metadata;
+              try { metadata = decryptVaultMetadata(JSON.parse(row.metadata_json), masterKey, user.id, row.id); }
+              catch { throw fail(500, 'vault_metadata_corrupt', '加密空間資源回收筒索引無法驗證；已停止顯示檔案清單。'); }
+              return { id: row.id, name: metadata.name, size: metadata.size, mediaType: metadata.mediaType, deletedAt: row.deleted_at };
+            });
+            return json(res, 200, { items });
+          });
+        }
+        const vaultRoot = path.join(dataDir, '.nanako-vault');
+        const userVaultDirectory = path.join(vaultRoot, user.id);
+        const vaultBackupRoot = path.join(userVaultDirectory, 'backups');
+        if (route === '/api/vault/backups' && method === 'GET') {
+          return await withVaultKey(user.id, async (masterKey) => {
+            await rejectSymlinkTraversal(dataDir, vaultRoot, vaultBackupRoot, false);
+            const items = [];
+            for (const id of await listVaultBackupDirectories(vaultBackupRoot)) {
+              try {
+                await rejectSymlinkTraversal(dataDir, vaultRoot, path.join(vaultBackupRoot, id));
+                const backup = await readVaultBackup({ backupRoot: vaultBackupRoot, backupId: id, userId: user.id, masterKey });
+                items.push({ id, createdAt: backup.manifest.createdAt, itemCount: backup.manifest.objects.length, encryptedBytes: backup.manifest.totalEncryptedBytes });
+              } catch { items.push({ id, createdAt: null, itemCount: null, encryptedBytes: null, invalid: true }); }
+            }
+            return json(res, 200, { items });
+          });
+        }
+        if (route === '/api/vault/backups' && method === 'POST') {
+          return await withVaultKey(user.id, async (masterKey, signal) => {
+            await rejectSymlinkTraversal(dataDir, vaultRoot, vaultBackupRoot, false);
+            await ensureManagedDirectory(vaultBackupRoot);
+            const vault = db.prepare('SELECT envelope_json, recovery_json FROM vaults WHERE user_id = ?').get(user.id);
+            const objects = db.prepare(`SELECT o.id, o.metadata_json, o.deleted_at, p.created_at AS pending_created_at
+              FROM vault_objects o LEFT JOIN vault_pending_imports p ON p.object_id = o.id
+              WHERE o.user_id = ? ORDER BY o.id`).all(user.id);
+            const result = await createVaultBackup({
+              backupRoot: vaultBackupRoot,
+              sourceRoot: userVaultDirectory,
+              userId: user.id,
+              masterKey,
+              vaultEnvelope: JSON.parse(vault.envelope_json),
+              recoveryEnvelope: vault.recovery_json ? JSON.parse(vault.recovery_json) : null,
+              objects,
+              signal,
+            });
+            return json(res, 201, { ok: true, backup: result });
+          });
+        }
+        const vaultBackupRestoreRoute = /^\/api\/vault\/backups\/([0-9a-f-]{36})\/restore$/iu.exec(route);
+        if (vaultBackupRestoreRoute && method === 'POST') {
+          const backupId = vaultBackupRestoreRoute[1].toLowerCase();
+          return await withVaultKey(user.id, async (masterKey, signal) => {
+            await rejectSymlinkTraversal(dataDir, vaultRoot, vaultBackupRoot, false);
+            const backup = await readVaultBackup({ backupRoot: vaultBackupRoot, backupId, userId: user.id, masterKey });
+            await rejectSymlinkTraversal(dataDir, vaultRoot, backup.directory);
+            const validated = await validateVaultBackupObjects({ backup, userId: user.id, masterKey, signal });
+            let restored = 0; let skipped = 0;
+            for (const item of validated) {
+              if (signal.aborted) throw fail(499, 'vault_backup_cancelled', '加密備份還原因加密空間鎖定而取消。');
+              const objectId = item.record.id;
+              const objectPath = path.join(userVaultDirectory, `${objectId}.nkv`);
+              const temporaryPath = `${objectPath}.tmp`;
+              const metadataPath = path.join(userVaultDirectory, `${objectId}.nkm`);
+              const metadataTemporaryPath = `${metadataPath}.tmp`;
+              await withPathLocks([objectPath, temporaryPath, metadataPath, metadataTemporaryPath], async () => {
+                const existing = db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, user.id);
+                const currentContent = await lstat(objectPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+                if (existing && currentContent?.isFile() && !currentContent.isSymbolicLink()) { skipped += 1; return; }
+                if (!existing && currentContent) throw fail(409, 'vault_orphan_unresolved', '加密空間有尚未處理的孤兒檔案；請先檢查復原清單再還原備份。');
+                if (currentContent && (!currentContent.isFile() || currentContent.isSymbolicLink())) throw fail(409, 'vault_storage_invalid', '加密空間目標路徑不安全；未還原備份。');
+                await copyVaultBackupObject(item.content, temporaryPath, signal);
+                const sidecar = await readVaultBackupSidecar(path.join(backup.directory, 'objects', `${objectId}.nkm`));
+                await writeFile(metadataTemporaryPath, sidecar, { flag: 'wx', mode: 0o600 });
+                await rename(metadataTemporaryPath, metadataPath);
+                await rename(temporaryPath, objectPath);
+                db.exec('BEGIN IMMEDIATE');
+                try {
+                  if (existing) db.prepare('UPDATE vault_objects SET metadata_json = ? WHERE id = ? AND user_id = ?')
+                    .run(JSON.stringify(item.record.metadata), objectId, user.id);
+                  else db.prepare('INSERT INTO vault_objects(id, user_id, metadata_json, deleted_at) VALUES(?,?,?,?)')
+                    .run(objectId, user.id, JSON.stringify(item.record.metadata), item.record.deletedAt || null);
+                  if (!existing && item.record.pendingCreatedAt) {
+                    db.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)')
+                      .run(objectId, user.id, item.record.pendingCreatedAt);
+                  }
+                  db.exec('COMMIT');
+                } catch (error) {
+                  try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
+                  throw error;
+                }
+                restored += 1;
+              });
+            }
+            return json(res, 200, { ok: true, restored, skipped, total: validated.length });
+          });
+        }
+        const vaultBackupDeleteRoute = /^\/api\/vault\/backups\/([0-9a-f-]{36})$/iu.exec(route);
+        if (vaultBackupDeleteRoute && method === 'DELETE') {
+          const backupId = vaultBackupDeleteRoute[1].toLowerCase();
+          const body = await readJson(req);
+          if (body.confirmText !== '刪除備份') throw fail(400, 'confirmation_required', '請輸入「刪除備份」確認操作。');
+          return await withVaultKey(user.id, async () => {
+            const target = path.join(vaultBackupRoot, backupId);
+            await rejectSymlinkTraversal(dataDir, vaultRoot, target);
+            const info = await lstat(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+            if (!info?.isDirectory() || info.isSymbolicLink()) throw fail(404, 'vault_backup_not_found', '找不到加密備份。');
+            await rm(target, { recursive: true, force: false });
+            return json(res, 200, { ok: true });
+          });
+        }
         if (route === '/api/vault/recovery' && method === 'GET') {
           return await withVaultKey(user.id, async (masterKey, signal) => {
+            await reconcileVaultOrphans(user.id, masterKey, signal);
             const rows = db.prepare(`SELECT p.object_id AS id, o.metadata_json
               FROM vault_pending_imports p JOIN vault_objects o ON o.id = p.object_id
               WHERE p.user_id = ? ORDER BY p.created_at LIMIT 101`).all(user.id);
@@ -957,7 +1268,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               }
               items.push({ id: row.id, name: metadata.name, size: metadata.size, shareId: metadata.sourceShareId, relativePath: metadata.relativePath, sourceState });
             }
-            return json(res, 200, { items, truncated: rows.length > 100 });
+            const orphans = await listVaultOrphans(user.id);
+            return json(res, 200, { items, truncated: rows.length > 100, orphans: orphans.slice(0, 100), orphansTruncated: orphans.length > 100 });
           });
         }
         const vaultRecoveryRoute = /^\/api\/vault\/recovery\/([0-9a-f-]{36})$/iu.exec(route);
@@ -1034,6 +1346,31 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             return json(res, 200, { ok: true, action: 'complete' });
           });
         }
+        const vaultOrphanRoute = /^\/api\/vault\/orphans\/([0-9a-f-]{36})$/iu.exec(route);
+        if (vaultOrphanRoute && method === 'POST') {
+          const objectId = vaultOrphanRoute[1].toLowerCase();
+          const body = await readJson(req);
+          if (body.confirmText !== '永久刪除孤兒密文') throw fail(400, 'confirmation_required', '請輸入「永久刪除孤兒密文」確認操作。');
+          return await withVaultKey(user.id, async () => {
+            if (db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, user.id)) throw fail(409, 'vault_orphan_indexed', '這個物件已出現在加密空間索引；請改用檔案清單操作。');
+            const directory = path.join(dataDir, '.nanako-vault', user.id);
+            const paths = [`${objectId}.nkv`, `${objectId}.nkv.tmp`, `${objectId}.nkm`, `${objectId}.nkm.tmp`].map((name) => path.join(directory, name));
+            await withPathLocks(paths, async () => {
+              if (db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, user.id)) throw fail(409, 'vault_orphan_indexed', '這個物件已出現在加密空間索引；請改用檔案清單操作。');
+              let found = false;
+              for (const target of paths) {
+                await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), target);
+                const info = await lstat(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+                if (!info) continue;
+                if (!info.isFile() || info.isSymbolicLink()) throw fail(409, 'vault_orphan_invalid', '孤兒路徑不是一般檔案；未刪除任何內容。');
+                found = true;
+              }
+              if (!found) throw fail(404, 'vault_orphan_not_found', '找不到這筆未索引加密資料。');
+              for (const target of paths) await rm(target, { force: true });
+            });
+            return json(res, 200, { ok: true });
+          });
+        }
         if (route === '/api/vault/objects/import' && method === 'POST') {
           const body = await readJson(req);
           const shareId = String(body.shareId || '');
@@ -1044,6 +1381,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           await rejectSymlinkTraversal(dataDir, root, sourcePath);
           const sourceInfo = await lstat(sourcePath).catch(() => null);
           if (!sourceInfo?.isFile()) throw fail(404, 'file_not_found', '找不到要移入的檔案，或項目不是一般檔案。');
+          if (activeVaultImports.has(user.id)) throw fail(409, 'vault_import_busy', '此帳號已有加密移入作業；請先完成或取消後再試。');
           const name = safeName(parts.at(-1));
           const directory = path.join(dataDir, '.nanako-vault', user.id);
           await ensureManagedDirectory(directory);
@@ -1051,11 +1389,16 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const objectId = crypto.randomUUID();
           const temporaryPath = path.join(directory, `${objectId}.nkv.tmp`);
           const objectPath = path.join(directory, `${objectId}.nkv`);
+          const metadataTemporaryPath = path.join(directory, `${objectId}.nkm.tmp`);
+          const metadataPath = path.join(directory, `${objectId}.nkm`);
           const importController = new AbortController();
+          if (activeVaultImports.has(user.id)) throw fail(409, 'vault_import_busy', '此帳號已有加密移入作業；請先完成或取消後再試。');
+          const importProgress = { id: crypto.randomUUID(), bytesRead: 0, totalBytes: sourceInfo.size, phase: '加密中', controller: importController };
+          activeVaultImports.set(user.id, importProgress);
           const cancelImport = () => { if (!res.writableEnded) importController.abort(); };
           res.once('close', cancelImport);
           let item;
-          try { item = await withVaultKey(user.id, async (masterKey, vaultSignal) => withPathLocks([sourcePath, temporaryPath, objectPath], async () => {
+          try { item = await withVaultKey(user.id, async (masterKey, vaultSignal) => withPathLocks([sourcePath, temporaryPath, objectPath, metadataTemporaryPath, metadataPath], async () => {
             const abortImport = () => importController.abort();
             if (vaultSignal.aborted) abortImport();
             else vaultSignal.addEventListener('abort', abortImport, { once: true });
@@ -1063,18 +1406,19 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             const sourceHash = crypto.createHash('sha256');
             const sourceStream = createReadStream(sourcePath, { signal: importController.signal });
             const trackedSource = new Transform({
-              transform(chunk, _encoding, callback) { sourceHash.update(chunk); callback(null, chunk); },
+              transform(chunk, _encoding, callback) { sourceHash.update(chunk); importProgress.bytesRead += chunk.length; callback(null, chunk); },
             });
             sourceStream.once('error', (error) => trackedSource.destroy(error));
             sourceStream.pipe(trackedSource);
             const output = createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 });
             const outputDone = finished(output);
-            let finalCreated = false;
+            let finalCreated = false; let metadataCreated = false;
             let indexed = false;
             try {
               const encrypted = await encryptVaultStream(trackedSource, output, { key: objectKey, objectId });
               output.end();
               await outputDone;
+              importProgress.phase = '驗證密文';
               const sourceDigest = sourceHash.digest('hex');
               const verifyHash = crypto.createHash('sha256');
               let verifiedBytes = 0;
@@ -1108,7 +1452,11 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
                 modifiedAt: sourceInfo.mtime.toISOString(),
                 mediaType,
               }, masterKey, user.id, objectId);
+              await writeFile(metadataTemporaryPath, JSON.stringify(metadata), { flag: 'wx', mode: 0o600 });
+              await rename(metadataTemporaryPath, metadataPath);
+              metadataCreated = true;
               await rename(temporaryPath, objectPath);
+              importProgress.phase = '寫入索引';
               finalCreated = true;
               db.exec('BEGIN IMMEDIATE');
               try {
@@ -1124,6 +1472,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               indexed = true;
               if (importController.signal.aborted) throw fail(499, 'vault_import_cancelled', '移入作業已取消；來源檔案未移除。');
               let sourceRemovalPending = false;
+              importProgress.phase = '移除已驗證來源';
               try { await unlink(sourcePath); }
               catch { sourceRemovalPending = true; }
               if (!sourceRemovalPending) {
@@ -1136,6 +1485,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               await outputDone.catch(() => {});
               if (indexed) db.prepare('DELETE FROM vault_objects WHERE id = ? AND user_id = ?').run(objectId, user.id);
               if (finalCreated) await rm(objectPath, { force: true }).catch(() => {});
+              if (metadataCreated) await rm(metadataPath, { force: true }).catch(() => {});
+              await rm(metadataTemporaryPath, { force: true }).catch(() => {});
               await rm(temporaryPath, { force: true }).catch(() => {});
               if (importController.signal.aborted) throw fail(499, 'vault_import_cancelled', '移入作業已取消；來源檔案未移除。');
               throw error;
@@ -1144,13 +1495,16 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               vaultSignal.removeEventListener('abort', abortImport);
             }
           })); }
-          finally { res.off('close', cancelImport); }
+          finally {
+            res.off('close', cancelImport);
+            if (activeVaultImports.get(user.id) === importProgress) activeVaultImports.delete(user.id);
+          }
           return json(res, 201, { ok: true, item });
         }
         const vaultObjectRoute = /^\/api\/vault\/objects\/([0-9a-f-]{36})(\/content)?$/iu.exec(route);
         if (vaultObjectRoute && method === 'GET' && vaultObjectRoute[2] === '/content') {
           const objectId = vaultObjectRoute[1].toLowerCase();
-          const row = db.prepare('SELECT metadata_json FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, user.id);
+          const row = db.prepare('SELECT metadata_json FROM vault_objects WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(objectId, user.id);
           if (!row) throw fail(404, 'vault_object_not_found', '找不到加密空間檔案。');
           return await withVaultKey(user.id, async (masterKey, signal) => {
             const abortResponse = () => { if (!res.destroyed) res.destroy(); };
@@ -1212,15 +1566,42 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         if (vaultObjectRoute && method === 'DELETE' && !vaultObjectRoute[2]) {
           const objectId = vaultObjectRoute[1].toLowerCase();
           const body = await readJson(req);
+            if (body.confirmText !== '移至資源回收筒') throw fail(400, 'confirmation_required', '請輸入「移至資源回收筒」確認操作。');
+          return await withVaultKey(user.id, async () => {
+            const row = db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(objectId, user.id);
+            if (!row) throw fail(404, 'vault_object_not_found', '找不到加密空間檔案。');
+            if (db.prepare('SELECT object_id FROM vault_pending_imports WHERE object_id = ? AND user_id = ?').get(objectId, user.id)) throw fail(409, 'vault_import_pending', '此檔案尚有未完成的移入復原作業；請先處理後再移至資源回收筒。');
+            db.prepare('UPDATE vault_objects SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL')
+              .run(new Date().toISOString(), objectId, user.id);
+            return json(res, 200, { ok: true });
+          });
+        }
+        const vaultTrashRestoreRoute = /^\/api\/vault\/trash\/([0-9a-f-]{36})\/restore$/iu.exec(route);
+        if (vaultTrashRestoreRoute && method === 'POST') {
+          const objectId = vaultTrashRestoreRoute[1].toLowerCase();
+          return await withVaultKey(user.id, async () => {
+            const row = db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL').get(objectId, user.id);
+            if (!row) throw fail(404, 'vault_trash_item_not_found', '找不到加密空間資源回收筒項目。');
+            db.prepare('UPDATE vault_objects SET deleted_at = NULL WHERE id = ? AND user_id = ?').run(objectId, user.id);
+            return json(res, 200, { ok: true });
+          });
+        }
+        const vaultTrashItemRoute = /^\/api\/vault\/trash\/([0-9a-f-]{36})$/iu.exec(route);
+        if (vaultTrashItemRoute && method === 'DELETE') {
+          const objectId = vaultTrashItemRoute[1].toLowerCase();
+          const body = await readJson(req);
           if (body.confirmText !== '永久刪除') throw fail(400, 'confirmation_required', '請輸入「永久刪除」確認操作。');
           return await withVaultKey(user.id, async () => {
-            const row = db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ?').get(objectId, user.id);
-            if (!row) throw fail(404, 'vault_object_not_found', '找不到加密空間檔案。');
+            const row = db.prepare('SELECT id FROM vault_objects WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL').get(objectId, user.id);
+            if (!row) throw fail(404, 'vault_trash_item_not_found', '找不到加密空間資源回收筒項目。');
             const directory = path.join(dataDir, '.nanako-vault', user.id);
             const objectPath = path.join(directory, `${objectId}.nkv`);
+            const metadataPath = path.join(directory, `${objectId}.nkm`);
             await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), objectPath);
-            await withPathLock(objectPath, async () => {
-              db.prepare('DELETE FROM vault_objects WHERE id = ? AND user_id = ?').run(objectId, user.id);
+            await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), metadataPath);
+            await withPathLocks([objectPath, metadataPath], async () => {
+              await rm(metadataPath, { force: true });
+              db.prepare('DELETE FROM vault_objects WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL').run(objectId, user.id);
               await rm(objectPath, { force: true });
             });
             return json(res, 200, { ok: true });
@@ -1855,7 +2236,22 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           auditEvent = null;
           return json(res, 200, { ok: true });
         }
+        if (route === '/api/archive/status' && method === 'GET') {
+          const job = activeArchiveJobs.get(user.id);
+          return json(res, 200, { active: Boolean(job), ...(job ? {
+            id: job.id, operation: job.operation, phase: job.phase, bytesRead: job.bytesRead,
+            totalBytes: job.totalBytes, entriesDone: job.entriesDone, totalEntries: job.totalEntries,
+          } : {}) });
+        }
+        if (route === '/api/archive/cancel' && method === 'POST') {
+          const job = activeArchiveJobs.get(user.id);
+          if (!job) return json(res, 200, { active: false });
+          if (job.phase === '發佈 ZIP 成品' || job.phase === '發佈解壓內容') throw fail(409, 'archive_too_late_to_cancel', 'ZIP 成品發佈階段已開始，無法安全取消；請等待作業完成。');
+          job.controller.abort();
+          return json(res, 200, { active: true, cancelling: true });
+        }
         if ((route === '/api/archive/create' || route === '/api/archive/extract') && method === 'POST') {
+          if (activeArchiveJobs.has(user.id)) throw fail(409, 'archive_job_busy', '此帳號已有 ZIP 作業進行中；請先完成或取消後再試。');
           const body = await readJson(req);
           const shareId = String(body.shareId || '');
           requirePermission(user, shareId, true);
@@ -1871,15 +2267,31 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             const archivePath = path.join(path.dirname(source.target), archiveName);
             await rejectSymlinkTraversal(dataDir, root, archivePath, false);
             if (auditEvent) auditEvent.target = parts.join('/');
-            const result = await createArchive({ sourcePath: source.target, shareRoot: root, archivePath });
-            return json(res, 201, { ok: true, name: archiveName, ...result });
+            const controller = new AbortController();
+            const job = { id: crypto.randomUUID(), operation: 'create', phase: '準備 ZIP', bytesRead: 0, totalBytes: 0, entriesDone: 0, totalEntries: 0, controller };
+            activeArchiveJobs.set(user.id, job);
+            try {
+              const result = await createArchive({
+                sourcePath: source.target, shareRoot: root, archivePath, signal: controller.signal,
+                onProgress: (progress) => Object.assign(job, progress),
+              });
+              return json(res, 201, { ok: true, name: archiveName, ...result });
+            } finally { if (activeArchiveJobs.get(user.id) === job) activeArchiveJobs.delete(user.id); }
           }
           if (sourceInfo.isDirectory() || path.extname(source.target).toLowerCase() !== '.zip') throw fail(400, 'invalid_archive_source', '請選取 ZIP 檔案進行解壓縮。');
           const destinationPath = path.join(path.dirname(source.target), path.basename(source.target, path.extname(source.target)));
           await rejectSymlinkTraversal(dataDir, root, destinationPath, false);
           if (auditEvent) auditEvent.target = parts.join('/');
-          const result = await extractArchive({ archivePath: source.target, shareRoot: root, destinationPath });
-          return json(res, 201, { ok: true, name: path.basename(destinationPath), ...result });
+          const controller = new AbortController();
+          const job = { id: crypto.randomUUID(), operation: 'extract', phase: '檢查 ZIP', bytesRead: 0, totalBytes: 0, entriesDone: 0, totalEntries: 0, controller };
+          activeArchiveJobs.set(user.id, job);
+          try {
+            const result = await extractArchive({
+              archivePath: source.target, shareRoot: root, destinationPath, signal: controller.signal,
+              onProgress: (progress) => Object.assign(job, progress),
+            });
+            return json(res, 201, { ok: true, name: path.basename(destinationPath), ...result });
+          } finally { if (activeArchiveJobs.get(user.id) === job) activeArchiveJobs.delete(user.id); }
         }
         if (route === '/api/network' && method === 'GET') {
           return json(res, 200, { host: '127.0.0.1', port: server.address()?.port, localOnly: true, interfaces: listNetworkInterfaces() });
@@ -1929,6 +2341,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       for (const job of duplicateScans.values()) {
         if (['scanning', 'cancelling'].includes(job.status)) job.controller.abort();
       }
+      for (const job of activeArchiveJobs.values()) job.controller.abort();
       const closeServer = new Promise((done) => server.close(done));
       const lockPromises = [...unlockedVaultKeys.keys()].map((userId) => lockVaultKey(userId));
       server.closeAllConnections?.();

@@ -47,11 +47,13 @@ function validatedEntryPath(entry) {
   return { parts, directory, relative: parts.join('/') };
 }
 
-async function walk(source, base, rows, totals, depth = 0) {
+async function walk(source, base, rows, totals, depth = 0, signal, onProgress) {
+  if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
   if (depth > 64) throw archiveError(413, 'archive_limit_exceeded', '資料夾層數超過 ZIP 上限。');
   const entries = await readdir(source, { withFileTypes: true });
   entries.sort((a, b) => a.name.localeCompare(b.name, 'zh-TW', { numeric: true }));
   for (const entry of entries) {
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     if (entry.name.startsWith('.localnas-')) continue;
     const target = path.join(source, entry.name);
     const info = await lstat(target);
@@ -68,12 +70,13 @@ async function walk(source, base, rows, totals, depth = 0) {
       totals.bytes += info.size;
       if (totals.bytes > MAX_UNCOMPRESSED_BYTES) throw archiveError(413, 'archive_limit_exceeded', 'ZIP 內容總大小不得超過 20 GiB。');
     } else {
-      await walk(target, base, rows, totals, depth + 1);
+      await walk(target, base, rows, totals, depth + 1, signal, onProgress);
     }
+    onProgress?.({ phase: '掃描檔案清單', bytesRead: totals.bytes, totalBytes: totals.bytes, entriesDone: rows.length, totalEntries: null });
   }
 }
 
-export async function createArchive({ sourcePath, shareRoot, archivePath }) {
+export async function createArchive({ sourcePath, shareRoot, archivePath, signal, onProgress }) {
   if (!inside(shareRoot, sourcePath) || !inside(shareRoot, archivePath)) throw archiveError(400, 'invalid_path', 'ZIP 路徑必須位於 Nanako 資料空間內。');
   const sourceInfo = await lstat(sourcePath).catch(() => null);
   if (!sourceInfo || sourceInfo.isSymbolicLink() || (!sourceInfo.isFile() && !sourceInfo.isDirectory())) {
@@ -86,7 +89,7 @@ export async function createArchive({ sourcePath, shareRoot, archivePath }) {
   const totals = { bytes: 0 };
   if (sourceInfo.isDirectory()) {
     rows.push({ target: sourcePath, relative: '', directory: true, size: 0, mtime: sourceInfo.mtime });
-    await walk(sourcePath, sourcePath, rows, totals);
+    await walk(sourcePath, sourcePath, rows, totals, 0, signal, onProgress);
   } else {
     totals.bytes = sourceInfo.size;
     if (totals.bytes > MAX_UNCOMPRESSED_BYTES) throw archiveError(413, 'archive_limit_exceeded', 'ZIP 內容總大小不得超過 20 GiB。');
@@ -96,10 +99,12 @@ export async function createArchive({ sourcePath, shareRoot, archivePath }) {
 
   const temporaryPath = path.join(path.dirname(archivePath), `.localnas-archive-${randomUUID()}.tmp`);
   let writer;
+  let completedBytes = 0;
   try {
     const output = Writable.toWeb(createWriteStream(temporaryPath, { flags: 'wx' }));
     writer = new ZipWriter(output, { zip64: true, bufferedWrite: false, useWebWorkers: false });
     for (const row of rows) {
+      if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
       const entryName = sourceInfo.isDirectory()
         ? (row.relative ? `${rootName}/${row.relative}` : `${rootName}/`)
         : rootName;
@@ -108,19 +113,34 @@ export async function createArchive({ sourcePath, shareRoot, archivePath }) {
       } else {
         const before = await lstat(row.target);
         if (!before.isFile() || before.size !== row.size || before.mtimeMs !== row.mtimeMs) throw archiveError(409, 'source_changed', '壓縮期間來源檔案有所變更，請重新操作。');
-        await writer.add(entryName, Readable.toWeb(createReadStream(row.target)), { level: 6, lastModDate: row.mtime });
+        await writer.add(entryName, Readable.toWeb(createReadStream(row.target, { signal })), {
+          level: 6,
+          lastModDate: row.mtime,
+          signal,
+          onprogress: (progress) => onProgress?.({
+            phase: '建立 ZIP', bytesRead: Math.min(totals.bytes, completedBytes + progress), totalBytes: totals.bytes,
+            entriesDone: rows.indexOf(row), totalEntries: rows.length,
+          }),
+        });
+        completedBytes += row.size;
         const after = await lstat(row.target);
         if (!after.isFile() || after.size !== row.size || after.mtimeMs !== row.mtimeMs) throw archiveError(409, 'source_changed', '壓縮期間來源檔案有所變更，請重新操作。');
       }
     }
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
+    onProgress?.({ phase: '完成 ZIP 索引', bytesRead: totals.bytes, totalBytes: totals.bytes, entriesDone: rows.length, totalEntries: rows.length });
     await writer.close();
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     const outputInfo = await stat(temporaryPath);
     if (!outputInfo.isFile() || outputInfo.size === 0) throw archiveError(500, 'archive_write_failed', 'ZIP 檔案建立失敗。');
+    onProgress?.({ phase: '發佈 ZIP 成品', bytesRead: totals.bytes, totalBytes: totals.bytes, entriesDone: rows.length, totalEntries: rows.length });
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await rename(temporaryPath, archivePath);
     return { size: outputInfo.size, entryCount: rows.length, sourceBytes: totals.bytes };
   } catch (error) {
     try { await writer?.close(); } catch { /* remove partial output below */ }
     await rm(temporaryPath, { force: true }).catch(() => {});
+    if (signal?.aborted || error.code === 'ABORT_ERR') throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消；暫存檔已清除。');
     throw error;
   }
 }
@@ -207,7 +227,7 @@ function validateEntries(entries) {
   return { expandedBytes: expanded, entryCount: entries.length };
 }
 
-export async function extractArchive({ archivePath, shareRoot, destinationPath }) {
+export async function extractArchive({ archivePath, shareRoot, destinationPath, signal, onProgress }) {
   if (!inside(shareRoot, archivePath) || !inside(shareRoot, destinationPath)) throw archiveError(400, 'invalid_path', 'ZIP 路徑必須位於 Nanako 資料空間內。');
   const archiveInfo = await lstat(archivePath).catch(() => null);
   if (!archiveInfo?.isFile() || archiveInfo.isSymbolicLink()) throw archiveError(404, 'archive_not_found', '找不到 ZIP 檔案。');
@@ -223,7 +243,9 @@ export async function extractArchive({ archivePath, shareRoot, destinationPath }
     await mkdir(stagingPath, { recursive: false });
     const rootName = path.basename(destinationPath);
     validateName(rootName);
+    let completedBytes = 0; let completedEntries = 0;
     for (const entry of entries) {
+      if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
       const { parts, directory } = validatedEntryPath(entry);
       const relativeParts = entry.filename.startsWith(`${rootName}/`) ? parts.slice(1) : parts;
       if (!relativeParts.length) continue;
@@ -231,19 +253,36 @@ export async function extractArchive({ archivePath, shareRoot, destinationPath }
       if (!inside(stagingPath, target)) throw archiveError(400, 'invalid_archive_path', 'ZIP 路徑超出解壓縮範圍。');
       if (directory) {
         await mkdir(target, { recursive: true });
+        completedEntries += 1;
+        onProgress?.({ phase: '解壓 ZIP', bytesRead: completedBytes, totalBytes: summary.expandedBytes, entriesDone: completedEntries, totalEntries: entries.length });
         continue;
       }
       await mkdir(path.dirname(target), { recursive: true });
-      const output = Writable.toWeb(createWriteStream(target, { flags: 'wx' }));
-      await entry.getData(output, { checkCrc32: true, checkOverlappingEntry: true, useWebWorkers: false });
+      const output = Writable.toWeb(createWriteStream(target, { flags: 'wx', mode: 0o600, signal }));
+      await entry.getData(output, {
+        checkCrc32: true,
+        checkOverlappingEntry: true,
+        useWebWorkers: false,
+        signal,
+        onprogress: (progress) => onProgress?.({
+          phase: '解壓 ZIP', bytesRead: Math.min(summary.expandedBytes, completedBytes + progress),
+          totalBytes: summary.expandedBytes, entriesDone: completedEntries, totalEntries: entries.length,
+        }),
+      });
+      completedBytes += entry.uncompressedSize;
+      completedEntries += 1;
     }
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await reader.close();
     reader = null;
+    onProgress?.({ phase: '發佈解壓內容', bytesRead: summary.expandedBytes, totalBytes: summary.expandedBytes, entriesDone: entries.length, totalEntries: entries.length });
+    if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await rename(stagingPath, destinationPath);
     return summary;
   } catch (error) {
     await reader?.close().catch(() => {});
     await rm(stagingPath, { recursive: true, force: true }).catch(() => {});
+    if (signal?.aborted || error.code === 'ABORT_ERR') throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消；暫存項目已清除。');
     if (error.status) throw error;
     throw archiveError(400, 'invalid_archive', 'ZIP 無法解壓縮，可能已損毀或使用不支援的格式。');
   }

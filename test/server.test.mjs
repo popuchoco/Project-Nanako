@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
 import { startServer } from '../src/server.mjs';
 import { readWindowsSmbStatus } from '../src/windows-smb-status.mjs';
+
+const execFileAsync = promisify(execFile);
 
 async function setupServer(t, options = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'localnas-test-'));
@@ -98,7 +102,10 @@ test('vault imports only Nanako files, stores opaque ciphertext and serves authe
   const sourcePath = path.join(dataDir, 'files', shareId, 'vault-check.png');
   await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
   const encryptedPath = path.join(dataDir, '.nanako-vault', user.id, `${id}.nkv`);
+  const sidecarPath = path.join(dataDir, '.nanako-vault', user.id, `${id}.nkm`);
   const ciphertext = await readFile(encryptedPath);
+  const sidecar = await readFile(sidecarPath, 'utf8');
+  assert.equal(sidecar.includes('vault-check.png'), false);
   assert.equal(ciphertext.includes(sourceBytes), false);
   assert.equal(ciphertext.subarray(0, 8).toString('ascii'), 'NKVLT01\0');
   const indexDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
@@ -120,6 +127,13 @@ test('vault imports only Nanako files, stores opaque ciphertext and serves authe
   const rangeBytes = Buffer.from(await rangeResponse.arrayBuffer());
   assert.equal(rangeResponse.headers.get('content-range'), `bytes 300-599/${sourceBytes.length}`);
   assert.deepEqual(rangeBytes, sourceBytes.subarray(300, 600));
+  const concurrentRanges = await Promise.all([
+    fetch(`${base}${contentUrl}`, { headers: { Cookie: cookie, Range: 'bytes=0-255' } }),
+    fetch(`${base}${contentUrl}`, { headers: { Cookie: cookie, Range: `bytes=${sourceBytes.length - 256}-${sourceBytes.length - 1}` } }),
+  ]);
+  assert.ok(concurrentRanges.every((response) => response.status === 206));
+  assert.deepEqual(Buffer.from(await concurrentRanges[0].arrayBuffer()), sourceBytes.subarray(0, 256));
+  assert.deepEqual(Buffer.from(await concurrentRanges[1].arrayBuffer()), sourceBytes.subarray(-256));
 
   await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'read-only.png' })}`, {
     method: 'POST', headers: { Cookie: cookie }, body: Buffer.from('read only source'),
@@ -144,11 +158,24 @@ test('vault imports only Nanako files, stores opaque ciphertext and serves authe
 
   const unconfirmedDelete = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({}) });
   assert.equal(unconfirmedDelete.response.status, 400);
-  const deleted = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '永久刪除' }) });
+  const wrongDeleteConfirmation = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '永久刪除' }) });
+  assert.equal(wrongDeleteConfirmation.response.status, 400);
+  const deleted = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '移至資源回收筒' }) });
   assert.equal(deleted.response.status, 200);
-  await assert.rejects(readFile(encryptedPath), { code: 'ENOENT' });
+  assert.equal((await readFile(encryptedPath)).subarray(0, 8).toString('ascii'), 'NKVLT01\0');
+  const hiddenFromActive = await request('/api/vault/objects', { headers: { Cookie: cookie } });
+  assert.equal(hiddenFromActive.body.items.some((item) => item.id === id), false);
+  assert.equal((await request('/api/vault/trash', { headers: { Cookie: cookie } })).body.items.some((item) => item.id === id), true);
   const missingContent = await request(contentUrl, { headers: { Cookie: cookie } });
   assert.equal(missingContent.response.status, 404);
+  const restored = await request(`/api/vault/trash/${id}/restore`, { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(restored.response.status, 200);
+  assert.equal((await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items.some((item) => item.id === id), true);
+  await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '移至資源回收筒' }) });
+  const permanentlyDeleted = await request(`/api/vault/trash/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '永久刪除' }) });
+  assert.equal(permanentlyDeleted.response.status, 200);
+  await assert.rejects(readFile(encryptedPath), { code: 'ENOENT' });
+  await assert.rejects(readFile(sidecarPath), { code: 'ENOENT' });
 
   await request('/api/logout', { method: 'POST', headers: { Cookie: cookie } });
   const adminLogin = await request('/api/login', {
@@ -195,6 +222,230 @@ test('vault is locked again after server shutdown and restart', async (t) => {
     const status = await fetch(`${restartedBase}/api/vault/status`, { headers: { Cookie: restartedCookie } });
     assert.deepEqual(await status.json(), { configured: true, unlocked: false });
   } finally { await restarted.close(); }
+});
+
+test('vault recovery key unlocks the vault, can re-wrap the password, and can be rotated', async (t) => {
+  const { base, dataDir, request, setup } = await setupServer(t);
+  const { cookie, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-original-password-2026' }),
+  });
+  assert.equal(created.response.status, 201);
+  assert.match(created.body.recoveryCode, /^[a-f0-9]{64}$/u);
+  const db = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
+  try {
+    const row = db.prepare('SELECT envelope_json, recovery_json FROM vaults WHERE user_id = ?').get(user.id);
+    assert.equal(row.recovery_json.includes(created.body.recoveryCode), false);
+    assert.equal(row.envelope_json.includes(created.body.recoveryCode), false);
+  } finally { db.close(); }
+
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+  const recovered = await request('/api/vault/recover', {
+    method: 'POST', headers: auth, body: JSON.stringify({ recoveryCode: created.body.recoveryCode.match(/.{1,4}/gu).join('-') }),
+  });
+  assert.equal(recovered.response.status, 200, recovered.body.message);
+  assert.equal((await request('/api/vault/status', { headers: auth })).body.unlocked, true);
+
+  const changed = await request('/api/vault/password', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-new-password-2026' }),
+  });
+  assert.equal(changed.response.status, 200);
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+  const oldPassword = await request('/api/vault/unlock', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-original-password-2026' }),
+  });
+  assert.equal(oldPassword.response.status, 401);
+  const newPassword = await request('/api/vault/unlock', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-new-password-2026' }),
+  });
+  assert.equal(newPassword.response.status, 200);
+
+  const rotated = await request('/api/vault/recovery-key', { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(rotated.response.status, 200);
+  assert.notEqual(rotated.body.recoveryCode, created.body.recoveryCode);
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+  const staleRecovery = await request('/api/vault/recover', {
+    method: 'POST', headers: auth, body: JSON.stringify({ recoveryCode: created.body.recoveryCode }),
+  });
+  assert.equal(staleRecovery.response.status, 401);
+  const newRecovery = await request('/api/vault/recover', {
+    method: 'POST', headers: auth, body: JSON.stringify({ recoveryCode: rotated.body.recoveryCode }),
+  });
+  assert.equal(newRecovery.response.status, 200);
+});
+
+test('vault reconciliation adopts authenticated sidecar orphans, removes incomplete temps, and gates unknown orphan cleanup', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  await request('/api/vault/setup', { method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-orphan-password-2026' }) });
+  const content = Buffer.from('orphan reconciliation source payload');
+  await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'orphan-recovery.txt' })}`, { method: 'POST', headers: { Cookie: cookie }, body: content });
+  const imported = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'orphan-recovery.txt' }),
+  });
+  assert.equal(imported.response.status, 201);
+  const objectId = imported.body.item.id;
+  const directory = path.join(dataDir, '.nanako-vault', user.id);
+  const encryptedPath = path.join(directory, `${objectId}.nkv`);
+  const sidecarPath = path.join(directory, `${objectId}.nkm`);
+  const sourcePath = path.join(dataDir, 'files', shareId, 'orphan-recovery.txt');
+  const database = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try { database.prepare('DELETE FROM vault_objects WHERE id = ?').run(objectId); }
+  finally { database.close(); }
+  await writeFile(sourcePath, content);
+
+  const reconciled = await request('/api/vault/recovery', { headers: { Cookie: cookie } });
+  assert.equal(reconciled.response.status, 200, reconciled.body.message);
+  assert.equal(reconciled.body.items.some((item) => item.id === objectId && item.sourceState === 'unchanged'), true);
+  assert.equal((await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items.some((item) => item.id === objectId), true);
+  const completed = await request(`/api/vault/recovery/${objectId}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(completed.response.status, 200);
+  await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
+  assert.equal((await stat(sidecarPath)).isFile(), true);
+  assert.equal((await stat(encryptedPath)).isFile(), true);
+
+  const incompleteId = randomUUID();
+  const incompleteTemp = path.join(directory, `${incompleteId}.nkv.tmp`);
+  await writeFile(incompleteTemp, Buffer.from('partial encrypted stream'));
+  const unknownId = randomUUID();
+  const unknownFinal = path.join(directory, `${unknownId}.nkv`);
+  await writeFile(unknownFinal, Buffer.from('unknown legacy ciphertext'));
+  const orphanReport = await request('/api/vault/recovery', { headers: { Cookie: cookie } });
+  assert.equal(orphanReport.response.status, 200);
+  assert.equal(orphanReport.body.orphans.some((item) => item.id === unknownId), true);
+  await assert.rejects(readFile(incompleteTemp), { code: 'ENOENT' });
+  const refused = await request(`/api/vault/orphans/${unknownId}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ confirmText: '刪除' }),
+  });
+  assert.equal(refused.response.status, 400);
+  const discarded = await request(`/api/vault/orphans/${unknownId}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ confirmText: '永久刪除孤兒密文' }),
+  });
+  assert.equal(discarded.response.status, 200);
+  await assert.rejects(readFile(unknownFinal), { code: 'ENOENT' });
+});
+
+test('vault import reports streaming progress and cancellation keeps the original source', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  await request('/api/vault/setup', { method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-cancel-password-2026' }) });
+  const source = Buffer.alloc(64 * 1024 * 1024, 0x61);
+  const uploaded = await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'cancel-large.bin' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: source,
+  });
+  assert.equal(uploaded.response.status, 201);
+  const sourcePath = path.join(dataDir, 'files', shareId, 'cancel-large.bin');
+  const importRequest = request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'cancel-large.bin' }),
+  });
+  let observed = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const progress = await request('/api/vault/objects/import/status', { headers: { Cookie: cookie } });
+    if (progress.body.active && progress.body.bytesRead > 0) { observed = progress.body; break; }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(observed, 'streaming progress should become visible before the 64 MiB import finishes');
+  assert.ok(observed.bytesRead < observed.totalBytes);
+  const cancelled = await request('/api/vault/objects/import/cancel', { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(cancelled.response.status, 200);
+  assert.equal(cancelled.body.cancelling, true);
+  const result = await importRequest;
+  assert.equal(result.response.status, 499);
+  assert.equal(result.body.error, 'vault_import_cancelled');
+  assert.equal((await stat(sourcePath)).size, source.length);
+  const vaultDirectory = path.join(dataDir, '.nanako-vault', user.id);
+  assert.deepEqual((await readdir(vaultDirectory)).filter((name) => name.endsWith('.tmp')), []);
+  assert.equal((await request('/api/vault/objects/import/status', { headers: { Cookie: cookie } })).body.active, false);
+});
+
+test('large vault import streams a 96 MiB file without buffering the whole payload', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  await request('/api/vault/setup', { method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-memory-password-2026' }) });
+  const sourcePath = path.join(dataDir, 'files', shareId, 'large-vault.bin');
+  const handle = await open(sourcePath, 'wx');
+  const blockBytes = 1024 * 1024;
+  try { await handle.truncate(96 * blockBytes); }
+  finally { await handle.close(); }
+  const baselineRss = process.memoryUsage().rss;
+  let peakRss = baselineRss;
+  let peakUsage = process.memoryUsage();
+  let peakArrayBuffers = peakUsage.arrayBuffers;
+  const sample = setInterval(() => {
+    const usage = process.memoryUsage();
+    peakArrayBuffers = Math.max(peakArrayBuffers, usage.arrayBuffers);
+    if (usage.rss > peakRss) { peakRss = usage.rss; peakUsage = usage; }
+  }, 10);
+  sample.unref();
+  try {
+    const result = await request('/api/vault/objects/import', {
+      method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-vault.bin' }),
+    });
+    assert.equal(result.response.status, 201, result.body.message);
+    assert.equal(result.body.item.size, 96 * blockBytes);
+    assert.equal(await readFile(sourcePath).catch(() => null), null);
+  } finally {
+    clearInterval(sample);
+    peakRss = Math.max(peakRss, process.memoryUsage().rss);
+  }
+  assert.ok(peakRss - baselineRss < 96 * blockBytes,
+    `96 MiB 加密移入的 peak RSS 增量應小於來源檔大小；實測 ${((peakRss - baselineRss) / 1024 / 1024).toFixed(1)} MiB，peak ArrayBuffer=${(peakArrayBuffers / 1024 / 1024).toFixed(1)} MiB，peak external=${(peakUsage.external / 1024 / 1024).toFixed(1)} MiB`);
+});
+
+test('vault backups stay in NanakoData, authenticate manifests and restore encrypted objects', async (t) => {
+  const { base, dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  await request('/api/vault/setup', { method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-backup-password-2026' }) });
+  const sourceFiles = [
+    ['備份甲.png', Buffer.from('backup payload alpha')],
+    ['備份乙.png', Buffer.from('backup payload beta')],
+  ];
+  for (const [name, bytes] of sourceFiles) {
+    const upload = await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name })}`, { method: 'POST', headers: { Cookie: cookie }, body: bytes });
+    assert.equal(upload.response.status, 201);
+    const imported = await request('/api/vault/objects/import', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: name }) });
+    assert.equal(imported.response.status, 201);
+  }
+  const objects = (await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items;
+  const damagedBackup = await request('/api/vault/backups', { method: 'POST', headers: auth, body: '{}' });
+  const goodBackup = await request('/api/vault/backups', { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(damagedBackup.response.status, 201, damagedBackup.body.message);
+  assert.equal(goodBackup.response.status, 201, goodBackup.body.message);
+  const backupDirectory = path.join(dataDir, '.nanako-vault', user.id, 'backups');
+  assert.equal((await request('/api/vault/backups', { headers: { Cookie: cookie } })).body.items.length, 2);
+  const backupObjectPath = path.join(backupDirectory, damagedBackup.body.backup.id, 'objects', `${objects[0].id}.nkv`);
+  const backupCiphertext = await readFile(backupObjectPath);
+  assert.equal(backupCiphertext.includes(Buffer.from('backup payload')), false);
+  assert.equal((await readFile(path.join(backupDirectory, damagedBackup.body.backup.id, 'manifest.json'), 'utf8')).includes('備份甲.txt'), false);
+
+  for (const item of objects) {
+    await request(`/api/vault/objects/${item.id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '移至資源回收筒' }) });
+    await request(`/api/vault/trash/${item.id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '永久刪除' }) });
+  }
+  assert.equal((await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items.length, 0);
+  const corrupted = Buffer.from(backupCiphertext); corrupted[20] ^= 0x04; await writeFile(backupObjectPath, corrupted);
+  const refused = await request(`/api/vault/backups/${damagedBackup.body.backup.id}/restore`, { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(refused.response.status, 409);
+  assert.equal((await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items.length, 0);
+
+  const restored = await request(`/api/vault/backups/${goodBackup.body.backup.id}/restore`, { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(restored.response.status, 200, restored.body.message);
+  assert.equal(restored.body.restored, 2);
+  const restoredObjects = (await request('/api/vault/objects', { headers: { Cookie: cookie } })).body.items;
+  assert.equal(restoredObjects.length, 2);
+  for (const item of restoredObjects) {
+    const response = await fetch(`${base}/api/vault/objects/${item.id}/content`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200);
+    const source = sourceFiles.find(([name]) => name === item.name);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), source[1]);
+  }
 });
 
 test('vault import recovery removes only unchanged plaintext and can preserve changed sources', async (t) => {
@@ -800,6 +1051,41 @@ test('ZIP compression and extraction stream Nanako files without leaving partial
   assert.ok(history.body.logs.some((item) => item.action === '解壓縮 ZIP 檔案' && item.target === 'notes.zip'));
 });
 
+test('ZIP archives interoperate with Windows PowerShell archive tools', async (t) => {
+  if (process.platform !== 'win32') { t.skip('Windows ZIP interoperability check'); return; }
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const shareRoot = path.join(dataDir, 'files', shareId);
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const powershellSource = path.join(shareRoot, 'powershell.txt');
+  await writeFile(powershellSource, 'Windows PowerShell ZIP 互通測試');
+  const powershellZip = path.join(shareRoot, 'powershell.zip');
+  const compressScript = path.join(dataDir, 'compress-test.ps1');
+  await writeFile(compressScript, [
+    'param([string]$SourceFile, [string]$ArchiveFile)',
+    "$ErrorActionPreference = 'Stop'",
+    'Compress-Archive -LiteralPath $SourceFile -DestinationPath $ArchiveFile -Force',
+  ].join('\n'));
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', compressScript, powershellSource, powershellZip]);
+  const extracted = await request('/api/archive/extract', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'powershell.zip' }) });
+  assert.equal(extracted.response.status, 201, extracted.body.message);
+  assert.equal(await readFile(path.join(shareRoot, 'powershell', 'powershell.txt'), 'utf8'), 'Windows PowerShell ZIP 互通測試');
+
+  const nanakoSource = path.join(shareRoot, 'nanako.txt');
+  await writeFile(nanakoSource, 'Nanako ZIP to Windows archive tool');
+  const created = await request('/api/archive/create', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'nanako.txt' }) });
+  assert.equal(created.response.status, 201, created.body.message);
+  const expandPath = path.join(shareRoot, 'expanded-by-powershell');
+  const expandScript = path.join(dataDir, 'expand-test.ps1');
+  await writeFile(expandScript, [
+    'param([string]$ArchiveFile, [string]$DestinationPath)',
+    "$ErrorActionPreference = 'Stop'",
+    'Expand-Archive -LiteralPath $ArchiveFile -DestinationPath $DestinationPath -Force',
+  ].join('\n'));
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', expandScript, path.join(shareRoot, 'nanako.zip'), expandPath]);
+  assert.equal(await readFile(path.join(expandPath, 'nanako.txt'), 'utf8'), 'Nanako ZIP to Windows archive tool');
+});
+
 test('ZIP Slip entries are rejected before extraction writes outside Nanako storage', async (t) => {
   const { dataDir, request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();
@@ -840,6 +1126,37 @@ test('ZIP CRC corruption is rejected and leaves no partial extraction directory'
   assert.equal(await readFile(path.join(shareRoot, 'corrupted', 'payload.txt')).catch(() => null), null);
   const entries = await readdir(shareRoot);
   assert.ok(!entries.some((name) => name.startsWith('.localnas-extract-')));
+});
+
+test('ZIP progress is observable and cancellation removes staging data without changing the source', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const sourcePath = path.join(dataDir, 'files', shareId, 'cancel-zip.bin');
+  const file = await open(sourcePath, 'wx');
+  try {
+    for (let index = 0; index < 48; index += 1) await file.write(randomBytes(1024 * 1024));
+  } finally { await file.close(); }
+  const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const createRequest = request('/api/archive/create', { method: 'POST', headers, body: JSON.stringify({ shareId, path: 'cancel-zip.bin' }) });
+  let progress;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const status = await request('/api/archive/status', { headers: { Cookie: cookie } });
+    if (status.body.active && status.body.bytesRead > 0) { progress = status.body; break; }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(progress, 'ZIP compression progress should be visible while processing a 48 MiB file');
+  assert.equal(progress.operation, 'create');
+  assert.ok(progress.bytesRead < progress.totalBytes);
+  const cancel = await request('/api/archive/cancel', { method: 'POST', headers, body: '{}' });
+  assert.equal(cancel.response.status, 200);
+  assert.equal(cancel.body.cancelling, true);
+  const result = await createRequest;
+  assert.equal(result.response.status, 499);
+  assert.equal(result.body.error, 'archive_cancelled');
+  assert.equal((await stat(sourcePath)).size, 48 * 1024 * 1024);
+  assert.equal((await readFile(path.join(path.dirname(sourcePath), 'cancel-zip.zip')).catch(() => null)), null);
+  assert.equal((await readdir(path.dirname(sourcePath))).some((name) => name.startsWith('.localnas-archive-')), false);
+  assert.equal((await request('/api/archive/status', { headers: { Cookie: cookie } })).body.active, false);
 });
 
 test('large ZIP create and extract stream file data with bounded RSS growth', async (t) => {
