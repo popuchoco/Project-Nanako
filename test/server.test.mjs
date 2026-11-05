@@ -1266,7 +1266,7 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
   const file = await open(sourcePath, 'wx');
   const blockBytes = 1024 * 1024;
   try {
-    for (let index = 0; index < 32; index += 1) {
+    for (let index = 0; index < 64; index += 1) {
       let block = randomBytes(blockBytes);
       let offset = 0;
       while (offset < block.length) {
@@ -1307,18 +1307,18 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
       method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.bin' }),
     });
     assert.equal(created.response.status, 201, created.body.message);
-    assert.ok(created.body.size > 30 * 1024 * 1024);
+    assert.ok(created.body.size > 62 * 1024 * 1024);
   });
   const extractMemory = await measurePeakMemory(async () => {
     const extracted = await request('/api/archive/extract', {
       method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.zip' }),
     });
     assert.equal(extracted.response.status, 201, extracted.body.message);
-    assert.equal((await stat(path.join(dataDir, 'files', shareId, 'large-random', 'large-random.bin'))).size, 32 * blockBytes);
+    assert.equal((await stat(path.join(dataDir, 'files', shareId, 'large-random', 'large-random.bin'))).size, 64 * blockBytes);
   });
   for (const [phase, memory] of [['建立', createMemory], ['解壓', extractMemory]]) {
-    assert.ok(memory.rssDelta < 96 * 1024 * 1024 && memory.arrayBufferDelta < 32 * 1024 * 1024,
-      `32 MiB ZIP ${phase}串流應保持有界；RSS 增量實測 ${(memory.rssDelta / 1024 / 1024).toFixed(1)} MiB（限 96 MiB），ArrayBuffer 增量實測 ${(memory.arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 32 MiB）`);
+    assert.ok(memory.rssDelta < 96 * 1024 * 1024 && memory.arrayBufferDelta < 48 * 1024 * 1024,
+      `64 MiB ZIP ${phase}串流應保持有界；RSS 增量實測 ${(memory.rssDelta / 1024 / 1024).toFixed(1)} MiB（限 96 MiB），ArrayBuffer 增量實測 ${(memory.arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 48 MiB）`);
   }
 });
 
