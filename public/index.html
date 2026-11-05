@@ -166,6 +166,17 @@
       <section id="view-network" class="view-panel" hidden>
         <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">目前版本只接受本機連線，不會開放區域網路存取。</p></div></div>
         <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機模式</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>區域網路分享尚未啟用</strong><p>網路介面卡選擇、連接埠設定與 TLS 憑證管理會在後續階段加入；本原型不會變更 Windows 防火牆或路由器設定。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
+        <section id="smb-preflight" class="card smb-preflight admin-only" aria-labelledby="smb-preflight-title">
+          <div class="content-heading"><div><h3 id="smb-preflight-title">SMB 分享前置檢查</h3><p class="muted">SMB 是 Nanako 的必要功能。這裡先檢查 Windows SMB 元件；目前不會建立分享、變更 Windows 服務或修改防火牆。</p></div></div>
+          <dl class="smb-status-grid">
+            <dt>Windows SMB Server 服務</dt><dd id="smb-server-service">讀取中…</dd>
+            <dt>標準連接埠 TCP 445</dt><dd id="smb-port-status">讀取中…</dd>
+            <dt>SMB 分享管理命令</dt><dd id="smb-command-status">讀取中…</dd>
+            <dt>目前程序是否已提升</dt><dd id="smb-elevation-status">讀取中…</dd>
+            <dt>Nanako SMB 分享</dt><dd id="nanako-smb-status">尚未實作</dd>
+          </dl>
+          <p id="smb-preflight-message" class="inline-message" role="status" hidden></p>
+        </section>
       </section>
       <footer class="footer-note">資料儲存在本機。沒有 SSO、雲端同步或遙測。</footer>
     </section>

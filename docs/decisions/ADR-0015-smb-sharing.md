@@ -32,6 +32,10 @@ Nanako 是以 Windows 電腦提供類 NAS 體驗的 Electron 延伸作品。使�
 
 選定且實際採用第三方程式碼或套件時，才依維護規範將專案、鎖定版本、用途、授權與封裝狀態加入 `THIRD_PARTY.md`。
 
+## 目前已實作的前置項目
+
+管理員可在 Nanako「網路狀態」檢視 Windows SMB Server 服務狀態、TCP 445 是否有人監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。該檢查使用唯讀 PowerShell 查詢；不建立／移除 Windows 分享、不啟停 `LanmanServer`、不設定防火牆，也不代表 Nanako SMB 分享已可用。伺服器引擎、分享管理與逐帳號認證仍尚未實作。
+
 ## 驗收條件
 
 1. SMB 預設關閉，使用者可在 Nanako 管理介面明確啟用、停用並查閱實際服務狀態。

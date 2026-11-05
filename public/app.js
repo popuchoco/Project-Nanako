@@ -741,8 +741,55 @@ function resetPlayer() {
 }
 
 async function loadNetwork() {
-  try { const result = await api('/api/network'); $('#network-endpoint').textContent = `http://${result.host}:${result.port}`; const list = $('#interface-list'); list.replaceChildren(); for (const item of result.interfaces) { const row = document.createElement('li'); const name = document.createElement('span'); name.textContent = item.name; const address = document.createElement('span'); address.className = 'ip'; address.textContent = `${item.address} · ${item.family}`; row.append(name, address); list.append(row); } if (!result.interfaces.length) list.textContent = '目前沒有可用的網路介面卡。'; }
+  try {
+    const result = await api('/api/network');
+    $('#network-endpoint').textContent = `http://${result.host}:${result.port}`;
+    const list = $('#interface-list'); list.replaceChildren();
+    for (const item of result.interfaces) {
+      const row = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = item.name;
+      const address = document.createElement('span'); address.className = 'ip'; address.textContent = `${item.address} · ${item.family}`;
+      row.append(name, address); list.append(row);
+    }
+    if (!result.interfaces.length) list.textContent = '目前沒有可用的網路介面卡。';
+    if (state.user.role === 'admin') await loadSmbStatus();
+  }
   catch (error) { notify(error.message, true); }
+}
+
+async function loadSmbStatus() {
+  const fields = {
+    service: $('#smb-server-service'), port: $('#smb-port-status'), command: $('#smb-command-status'), elevation: $('#smb-elevation-status'),
+  };
+  const message = $('#smb-preflight-message');
+  message.hidden = true;
+  try {
+    const status = await api('/api/smb/status');
+    if (!status.supported) {
+      fields.service.textContent = '不支援此作業系統';
+      fields.port.textContent = '不適用';
+      fields.command.textContent = '不適用';
+      fields.elevation.textContent = '無法判定';
+      message.textContent = status.message || 'SMB 前置檢查僅支援 Windows。'; message.hidden = false;
+      return;
+    }
+    if (!status.detected) {
+      fields.service.textContent = '無法判定';
+      fields.port.textContent = '無法判定';
+      fields.command.textContent = '無法判定';
+      fields.elevation.textContent = status.processElevated === null ? '無法判定' : status.processElevated ? '已提升' : '未提升';
+      message.textContent = status.message || '無法讀取 Windows SMB 伺服器狀態。'; message.hidden = false;
+      return;
+    }
+    const serviceLabels = { Running: '執行中（Windows 內建服務）', Stopped: '已停止', Paused: '已暫停', StartPending: '啟動中', StopPending: '停止中', NotInstalled: '找不到服務' };
+    fields.service.textContent = serviceLabels[status.serverService] || '無法判定';
+    fields.port.textContent = status.port445Listening ? '使用中（Nanako 尚未監聽）' : '目前未使用';
+    fields.command.textContent = status.shareManagementAvailable ? '可用' : '不可用';
+    fields.elevation.textContent = status.processElevated === null ? '無法判定' : status.processElevated ? '已提升' : '未提升';
+  } catch (error) {
+    for (const field of Object.values(fields)) field.textContent = '讀取失敗';
+    message.textContent = error.message; message.hidden = false;
+  }
 }
 
 function addSupportPill(text, tone = '') {

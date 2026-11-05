@@ -139,3 +139,4 @@
 .app-window .file-batch-toolbar .toolbar{gap:5px}.app-window .file-batch-toolbar .button{min-height:29px;padding:0 8px;font-size:10px}
 .app-window .row-actions{flex-wrap:wrap;gap:2px}.app-window .text-action{font-size:10px;padding:4px}
 @media(max-width:650px){.file-batch-toolbar{align-items:flex-start;flex-direction:column}.file-batch-toolbar .toolbar{width:100%}.file-batch-toolbar .toolbar .button{flex:1;padding:0 6px}.row-actions{flex-wrap:wrap}.file-select-column{width:32px;padding-left:8px!important;padding-right:2px!important}td:last-child,th:last-child{width:150px}}
+.smb-preflight{max-width:760px;margin-top:18px}.smb-preflight .content-heading{margin-bottom:8px}.smb-status-grid{display:grid;grid-template-columns:minmax(160px,.8fr) minmax(0,1.2fr);gap:10px 16px;margin:12px 0 0}.smb-status-grid dt{font-size:12px;color:var(--muted)}.smb-status-grid dd{font-size:12px;margin:0;overflow-wrap:anywhere}

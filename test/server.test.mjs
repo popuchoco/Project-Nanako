@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { DatabaseSync } from 'node:sqlite';
 import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
 import { startServer } from '../src/server.mjs';
+import { readWindowsSmbStatus } from '../src/windows-smb-status.mjs';
 
 async function setupServer(t, options = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'localnas-test-'));
@@ -433,4 +434,58 @@ test('repeated failed local logins are temporarily throttled', async (t) => {
   const limited = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
   assert.equal(limited.response.status, 429);
   assert.equal(limited.body.error, 'login_throttled');
+});
+
+test('SMB status is an administrator-only, read-only preflight and never claims Nanako sharing is ready', async (t) => {
+  let probeCount = 0;
+  const { request, setup } = await setupServer(t, {
+    smbStatusProbe: async () => {
+      probeCount += 1;
+      return { supported: true, detected: true, serverService: 'Running', port445Listening: true, shareManagementAvailable: true, message: null };
+    },
+  });
+  const { cookie, shareId } = await setup();
+  const adminStatus = await request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(adminStatus.response.status, 200);
+  assert.equal(adminStatus.body.serverService, 'Running');
+  assert.equal(adminStatus.body.port445Listening, true);
+  assert.equal(adminStatus.body.nanakoSmbReady, false);
+  assert.equal(probeCount, 1);
+
+  const created = await request('/api/users', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'regular', password: 'regular-test-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }),
+  });
+  assert.equal(created.response.status, 201);
+  const login = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'regular', password: 'regular-test-passphrase-2026' }),
+  });
+  const denied = await request('/api/smb/status', { headers: { Cookie: login.response.headers.get('set-cookie').split(';')[0] } });
+  assert.equal(denied.response.status, 403);
+  assert.equal(probeCount, 1);
+});
+
+test('Windows SMB status probe validates the host response and avoids invoking PowerShell off Windows', async () => {
+  let called = false;
+  const unsupported = await readWindowsSmbStatus({ platform: 'linux', run: async () => { called = true; } });
+  assert.equal(unsupported.supported, false);
+  assert.equal(called, false);
+
+  const detected = await readWindowsSmbStatus({
+    platform: 'win32',
+    run: async (file, args) => {
+      assert.equal(file, 'powershell.exe');
+      assert.equal(args.includes('-NoProfile'), true);
+      return { stdout: JSON.stringify({ serverService: 'Running', port445Listening: true, shareManagementAvailable: true }) };
+    },
+  });
+  assert.equal(detected.detected, true);
+  assert.equal(detected.serverService, 'Running');
+  assert.equal(detected.port445Listening, true);
+
+  const malformed = await readWindowsSmbStatus({ platform: 'win32', run: async () => ({ stdout: '{"serverService":"Running"}' }) });
+  assert.equal(malformed.detected, false);
+  assert.equal(malformed.serverService, 'Unknown');
 });

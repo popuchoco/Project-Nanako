@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { createArchive, extractArchive } from './archives.mjs';
+import { readWindowsSmbStatus } from './windows-smb-status.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 const execFileAsync = promisify(execFile);
@@ -401,7 +402,7 @@ async function collectSystemInformation(dataDir) {
   };
 }
 
-export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765 } = {}) {
+export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus } = {}) {
   if (!dataDir) dataDir = path.join(projectRoot, 'NanakoData', 'data');
   if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
     throw new Error('此原型僅允許本機連線；區域網路連線尚未開放。');
@@ -466,6 +467,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'POST' && route === '/api/archive/extract') return { action: '解壓縮 ZIP 檔案', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/audit-settings') return { action: '更新操作紀錄保留期限', target: '操作紀錄設定' };
     if (method === 'DELETE' && route === '/api/audit-logs') return { action: '刪除所有操作紀錄', target: '所有使用者' };
+    if (method === 'GET' && route === '/api/smb/status') return { action: '查看 SMB 伺服器狀態', target: 'Windows SMB 前置檢查' };
     return null;
   }
 
@@ -1063,6 +1065,11 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         }
         if (route === '/api/network' && method === 'GET') {
           return json(res, 200, { host: '127.0.0.1', port: server.address()?.port, localOnly: true, interfaces: listNetworkInterfaces() });
+        }
+        if (route === '/api/smb/status' && method === 'GET') {
+          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看 SMB 伺服器狀態。');
+          const [smb, execution] = await Promise.all([smbStatusProbe(), collectWindowsExecutionState()]);
+          return json(res, 200, { ...smb, processElevated: execution.checked ? execution.isElevated : null, nanakoSmbReady: false });
         }
         throw fail(404, 'not_found', '找不到這個功能。');
       }
