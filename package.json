@@ -15,7 +15,7 @@
     "test:media": "electron electron/main.mjs --media-compatibility-test",
     "test:desktop-smoke": "node --test test/desktop-smoke.test.mjs",
     "package:win": "electron-builder --win portable --x64",
-    "test": "node --test"
+    "test": "node --expose-gc --test"
   },
   "devDependencies": {
     "electron": "45.2.2",

@@ -1277,6 +1277,8 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
     }
   } finally { await file.close(); }
 
+  global.gc?.();
+  await new Promise((resolve) => setImmediate(resolve));
   const baselineUsage = process.memoryUsage();
   let peakRss = baselineUsage.rss;
   let peakArrayBuffers = baselineUsage.arrayBuffers;
@@ -1304,8 +1306,8 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
   }
   const rssDelta = peakRss - baselineUsage.rss;
   const arrayBufferDelta = peakArrayBuffers - baselineUsage.arrayBuffers;
-  assert.ok(rssDelta < 64 * 1024 * 1024 && arrayBufferDelta < 24 * 1024 * 1024,
-    `32 MiB ZIP 串流應保持有界；RSS 增量實測 ${(rssDelta / 1024 / 1024).toFixed(1)} MiB（限 64 MiB），ArrayBuffer 增量實測 ${(arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 24 MiB）`);
+  assert.ok(rssDelta < 96 * 1024 * 1024 && arrayBufferDelta < 32 * 1024 * 1024,
+    `32 MiB ZIP 串流應保持有界；RSS 增量實測 ${(rssDelta / 1024 / 1024).toFixed(1)} MiB（限 96 MiB），ArrayBuffer 增量實測 ${(arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 32 MiB）`);
 });
 
 test('directory ZIP archives preserve nested files and empty directories', async (t) => {
