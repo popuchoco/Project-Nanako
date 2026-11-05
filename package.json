@@ -15,6 +15,7 @@
     "test:media": "electron electron/main.mjs --media-compatibility-test",
     "test:desktop-smoke": "node --test test/desktop-smoke.test.mjs",
     "package:win": "electron-builder --win portable --x64",
+    "package:win:installer": "electron-builder --win nsis --x64",
     "test": "node --expose-gc --test"
   },
   "devDependencies": {
@@ -52,6 +53,7 @@
       "!node_modules/@zip.js/zip.js/index.d.cts"
     ],
     "win": {
+      "icon": "electron/assets/nanako.ico",
       "target": [
         {
           "target": "portable",
@@ -61,6 +63,23 @@
         }
       ],
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Project Nanako",
+      "installerIcon": "electron/assets/nanako.ico",
+      "uninstallerIcon": "electron/assets/nanako.ico",
+      "installerLanguages": [
+        "en_US",
+        "zh_TW"
+      ],
+      "artifactName": "Nanako-${version}-x64-setup.${ext}"
     },
     "portable": {
       "artifactName": "Nanako-${version}-${arch}-portable.${ext}"

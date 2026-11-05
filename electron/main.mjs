@@ -7,10 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { startServer } from '../src/server.mjs';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR;
-const applicationDirectory = portableDirectory
-  || (app.isPackaged ? path.dirname(process.execPath) : path.resolve(currentDir, '..'));
-const appDataDirectory = path.join(applicationDirectory, 'NanakoData');
+const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR
+  ? path.resolve(process.env.PORTABLE_EXECUTABLE_DIR)
+  : null;
+const appDataDirectory = portableDirectory
+  ? path.join(portableDirectory, 'NanakoData')
+  : app.isPackaged
+    ? path.join(app.getPath('userData'), 'NanakoData')
+    : path.join(path.resolve(currentDir, '..'), 'NanakoData');
 function ensurePortableDirectory(directory) {
   let info;
   try { info = lstatSync(directory); }
@@ -32,6 +36,7 @@ app.setPath('sessionData', path.join(appDataDirectory, 'session'));
 const dataDirectory = path.join(appDataDirectory, 'data');
 const compatibilityTest = process.argv.includes('--media-compatibility-test');
 const traySmokeTest = process.argv.includes('--tray-smoke-test');
+const dataPathSmokeTest = process.argv.includes('--data-path-smoke-test');
 if (compatibilityTest) app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let service;
@@ -161,14 +166,26 @@ async function runTraySmokeTest() {
   app.quit();
 }
 
+async function runDataPathSmokeTest() {
+  const report = {
+    mode: portableDirectory ? 'portable' : app.isPackaged ? 'installed' : 'development',
+    portableDirectory,
+    appDataDirectory,
+  };
+  await writeFile(path.join(appDataDirectory, 'data-path-smoke-report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report));
+  app.exit(0);
+}
+
 app.whenReady().then(async () => {
   if (compatibilityTest) return runMediaCompatibilityTest();
   if (traySmokeTest) return runTraySmokeTest();
+  if (dataPathSmokeTest) return runDataPathSmokeTest();
   createTray();
   return createWindow();
 }).catch((error) => {
   console.error('Nanako 啟動失敗。', error);
-  if (traySmokeTest) { app.exit(2); return; }
+  if (traySmokeTest || dataPathSmokeTest) { app.exit(2); return; }
   app.quit();
 });
 

@@ -45,3 +45,38 @@ jobs:
           if (-not $trayResult.trayCreated -or -not $trayResult.closeHidesToTray -or -not $trayResult.windowRestored) {
             throw 'The packaged system tray smoke report indicates a failed check.'
           }
+          $dataTest = Start-Process -FilePath $artifacts[0].FullName -ArgumentList '--data-path-smoke-test' -Wait -PassThru -WindowStyle Hidden
+          if ($dataTest.ExitCode -ne 0) { throw 'The portable data-path smoke test failed.' }
+          $dataReport = Join-Path (Get-Location).Path 'dist\NanakoData\data-path-smoke-report.json'
+          $dataResult = Get-Content -LiteralPath $dataReport -Raw | ConvertFrom-Json
+          if ($dataResult.mode -ne 'portable' -or $dataResult.appDataDirectory -ne (Join-Path (Get-Location).Path 'dist\NanakoData')) {
+            throw 'The portable data path did not remain next to the executable.'
+          }
+      - run: npm run package:win:installer
+      - name: Install and verify the per-user NSIS package
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Nanako-*-x64-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw 'The x64 NSIS setup executable was not produced.' }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'nanako-installer-smoke'
+          $install = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$installRoot") -Wait -PassThru -WindowStyle Hidden
+          if ($install.ExitCode -ne 0) { throw 'The per-user NSIS install did not complete.' }
+          $installedExecutable = Join-Path $installRoot 'Project Nanako.exe'
+          if (-not (Test-Path -LiteralPath $installedExecutable -PathType Leaf)) {
+            throw 'The installed application executable was not found.'
+          }
+          $userDataRoot = Join-Path $env:RUNNER_TEMP 'nanako-installed-userdata'
+          $userDataArgument = "--user-data-dir=$userDataRoot"
+          $dataTest = Start-Process -FilePath $installedExecutable -ArgumentList @($userDataArgument, '--data-path-smoke-test') -Wait -PassThru -WindowStyle Hidden
+          if ($dataTest.ExitCode -ne 0) { throw 'The installed data-path smoke test failed.' }
+          $dataReport = Join-Path $userDataRoot 'NanakoData\data-path-smoke-report.json'
+          $dataResult = Get-Content -LiteralPath $dataReport -Raw | ConvertFrom-Json
+          if ($dataResult.mode -ne 'installed' -or $dataResult.appDataDirectory -ne (Join-Path $userDataRoot 'NanakoData')) {
+            throw 'The installed application data did not use its per-user userData directory.'
+          }
+          $trayTest = Start-Process -FilePath $installedExecutable -ArgumentList @($userDataArgument, '--tray-smoke-test') -Wait -PassThru -WindowStyle Hidden
+          if ($trayTest.ExitCode -ne 0) { throw 'The installed system tray smoke test failed.' }
+          $trayReport = Get-Content -LiteralPath (Join-Path $userDataRoot 'NanakoData\tray-smoke-report.json') -Raw | ConvertFrom-Json
+          if (-not $trayReport.trayCreated -or -not $trayReport.closeHidesToTray -or -not $trayReport.windowRestored) {
+            throw 'The installed system tray smoke report indicates a failed check.'
+          }

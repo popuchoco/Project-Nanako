@@ -3,9 +3,10 @@
 ## 未發行
 
 - Windows 桌面版新增系統匣入口：關閉主視窗會隱藏並繼續提供本機 UI，系統匣點擊可還原，明確選擇退出才會關閉 HTTP 服務。
+- 新增 NSIS 單使用者 Windows 安裝程式與專案圖示；安裝不要求系統管理員權限，安裝版資料放在使用者 `userData\NanakoData`，與可攜式資料目錄分開且不自動遷移。CI 加入安裝版封裝、隔離資料路徑與系統匣驗證。
 - 播放器新增本機續播：播放進度依 Nanako 使用者、資料空間與檔案大小／修改時間識別，儲存在 NanakoData SQLite；媒體讀取權限與檔案版本會由服務端再次檢查，自動清除已完成或已變更檔案的進度，每位使用者最多保留 500 筆，資料不送出亦不寫入操作紀錄。Electron 桌面重開煙霧測試涵蓋續播位置還原。
-- 此輪本機 `npm test` 全數 64 項通過；Windows x64 可攜式封裝與封裝後媒體／系統匣 smoke test 通過，大小 102,843,201-byte。GitHub Actions 首輪 ZIP 記憶體門檻在 Windows runner 證實過嚴，已改成 64 MiB 來源、建立／解壓分開於 GC 後量測 RSS／ArrayBuffer，補強跨平台效能驗收；較新的 Windows 產品 CI 正在執行。
-- SMB POC 研究新增 `paltaio/rust-smb-server` 0.8.0 為待驗證候選：Windows `cargo test --workspace` 使用其宣告最低版本 Rust 1.95.0 後通過；本機 GNU target 缺少 `dlltool.exe` 仍無法啟動。候選尚未整合，保留 Nanako scrypt 密碼驗證器無法重建 SMB 明文憑證、TCP 445 衝突與協定功能缺口等閘門；未匯入套件、未開啟監聽或修改 Windows 分享設定。
+- 此輪本機及 GitHub Actions `npm test` 全數 64 項通過；Windows x64 可攜式封裝及封裝後媒體／系統匣 smoke test 通過，GitHub Actions 已完整驗證（[Windows product checks](https://github.com/popuchoco/Project-Nanako/actions/runs/42026017676)），本機封裝大小 102,847,177-byte。ZIP 記憶體測試已改成 64 MiB 來源、建立／解壓分別於 GC 後量測 RSS／ArrayBuffer，跨 Windows 執行環境通過。
+- SMB POC 研究新增 `paltaio/rust-smb-server` 0.8.0 為待驗證候選：Windows `cargo test --workspace` 使用其宣告最低版本 Rust 1.95.0 後通過（[SMB candidate tests](https://github.com/popuchoco/Project-Nanako/actions/runs/42025376351)）；本機 GNU target 缺少 `dlltool.exe` 仍無法啟動。候選尚未整合，保留 Nanako scrypt 密碼驗證器無法重建 SMB 明文憑證、TCP 445 衝突與協定功能缺口等閘門；未匯入套件、未開啟監聽或修改 Windows 分享設定。
 - 新增 Windows Electron 桌面煙霧測試，實際啟動介面完成管理員首次設定、登入、建立使用者與資料夾、正常關閉及重開後確認資料仍可見。測試找到並修正桌面互動初始化對已移除 `logout-menu-button` 的空元素綁定，以及非同步登入／初始設定／使用者建立完成後讀取失效 `event.currentTarget` 的問題。
 - v0.3 加密空間原型已補齊復原金鑰建立／離線復原／輪替、密碼變更、加密 sidecar 與孤兒核對、密文資源回收筒、同一 NanakoData 內加密備份／還原，以及移入進度／取消。加密媒體支援受控 Range 串流與並行讀取；96 MiB 檔案整合測試驗證串流操作的 peak RSS 增量低於來源檔大小。新寫入採 128 KiB AES-256-GCM 區塊，仍可讀取早期 v1 原型的 1 MiB 區塊。全套 60 項測試通過；仍是原型，尚需獨立安全審查、格式升級測試及磁碟滿載／強制中斷故障注入，不保證 SSD 安全抹除或異地備份。
 - ZIP 原型補齊進度／取消與暫存清理；修改封存內容會因 CRC 驗證失敗而拒絕解壓。32 MiB 串流測試及 Windows PowerShell `Compress-Archive`／`Expand-Archive` 互通測試通過；採用的 zip.js 2.24.0 已列於 `THIRD_PARTY.md`。更多大型封存、多環境記憶體量測及多類損毀格式仍待驗證。
