@@ -14,6 +14,7 @@ import { createArchive, extractArchive } from './archives.mjs';
 import { readWindowsSmbStatus } from './windows-smb-status.mjs';
 import { isShareOperationAllowed } from './share-access.mjs';
 import { hashManagedFile, scanManagedDuplicates } from './duplicates.mjs';
+import { searchManagedFiles } from './file-catalog.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 const execFileAsync = promisify(execFile);
@@ -455,6 +456,10 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   function auditForRequest(user, method, route, url) {
     const target = (value) => String(value || '').replace(/[\r\n\0]/gu, ' ').slice(0, 512);
     if (method === 'GET' && route === '/api/files') return { action: '瀏覽資料夾', target: target(url.searchParams.get('path') || '主資料夾') };
+    if (method === 'GET' && route === '/api/files/search') {
+      const categories = { image: '圖片', video: '影片', audio: '音訊', document: '文件' };
+      return { action: '搜尋資料空間分類', target: categories[url.searchParams.get('category')] || '檔案分類' };
+    }
     if (method === 'GET' && route === '/api/preview') return { action: '開啟媒體預覽', target: target(url.searchParams.get('path')) };
     if (method === 'GET' && route === '/api/download') return { action: '下載檔案', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/folders') return { action: '建立資料夾', target: target(url.searchParams.get('path')) };
@@ -924,6 +929,23 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           }
           items.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name, 'zh-TW', { numeric: true }));
           return json(res, 200, { path: relativeParts(url.searchParams.get('path') || '').join('/'), items, canWrite: Boolean(permission(user, shareId).can_write) });
+        }
+        if (route === '/api/files/search' && method === 'GET') {
+          const shareId = url.searchParams.get('shareId') || '';
+          requirePermission(user, shareId);
+          const { share, root } = shareRoot(shareId);
+          await rejectSymlinkTraversal(dataDir, dataDir, root);
+          const results = await searchManagedFiles({
+            root,
+            category: url.searchParams.get('category') || '',
+            search: url.searchParams.get('search') || '',
+            verifyPath: (target) => rejectSymlinkTraversal(dataDir, root, target),
+          });
+          return json(res, 200, {
+            ...results,
+            share: { id: share.id, name: share.name },
+            canWrite: Boolean(permission(user, shareId).can_write),
+          });
         }
         if (route === '/api/folders' && method === 'POST') {
           const body = await readJson(req);

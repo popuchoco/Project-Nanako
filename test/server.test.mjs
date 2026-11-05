@@ -64,6 +64,51 @@ test('setup, login, file transfer, recycle bin and restore work locally', async 
   assert.equal(restored.body, '本機測試內容');
 });
 
+test('file category search covers one Nanako share recursively and honours read permissions', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  for (const name of ['相簿', '相簿/旅行']) {
+    const [parent, folder] = name.includes('/') ? name.split(/\/(?=[^/]+$)/u) : ['', name];
+    const created = await request('/api/folders', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: parent, name: folder }) });
+    assert.equal(created.response.status, 201);
+  }
+  const upload = async (folder, name, contents) => request(`/api/upload?${new URLSearchParams({ shareId, path: folder, name })}`, { method: 'POST', headers: { Cookie: cookie }, body: Buffer.from(contents) });
+  assert.equal((await upload('相簿/旅行', '海邊.JPG', 'image')).response.status, 201);
+  assert.equal((await upload('相簿/旅行', '海邊.mp4', 'video')).response.status, 201);
+  const categoryQuery = new URLSearchParams({ shareId, category: 'image' });
+  const images = await request(`/api/files/search?${categoryQuery}`, { headers: { Cookie: cookie } });
+  assert.equal(images.response.status, 200);
+  assert.deepEqual(images.body.items.map((item) => item.path), ['相簿/旅行/海邊.JPG']);
+  assert.equal(images.body.canWrite, true);
+  assert.equal(images.body.share.id, shareId);
+  assert.ok(images.body.scannedEntries >= 4);
+
+  categoryQuery.set('search', '私人查詢字串');
+  const noMatch = await request(`/api/files/search?${categoryQuery}`, { headers: { Cookie: cookie } });
+  assert.deepEqual(noMatch.body.items, []);
+  const history = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  assert.ok(history.body.logs.some((log) => log.action === '搜尋資料空間分類' && log.target === '圖片'));
+  assert.equal(JSON.stringify(history.body).includes('私人查詢字串'), false);
+
+  const created = await request('/api/users', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ username: 'catalog-reader', password: 'catalog-reader-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }),
+  });
+  assert.equal(created.response.status, 201);
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'catalog-reader', password: 'catalog-reader-passphrase-2026' }) });
+  const reader = { Cookie: login.response.headers.get('set-cookie').split(';')[0] };
+  const readerSearch = await request(`/api/files/search?${new URLSearchParams({ shareId, category: 'image' })}`, { headers: reader });
+  assert.equal(readerSearch.response.status, 200);
+  assert.equal(readerSearch.body.canWrite, false);
+
+  const invalid = await request(`/api/files/search?${new URLSearchParams({ shareId, category: 'all' })}`, { headers: { Cookie: cookie } });
+  assert.equal(invalid.response.status, 400);
+  const outsideRoot = await request(`/api/files/search?${new URLSearchParams({ shareId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', category: 'image' })}`, { headers: { Cookie: cookie } });
+  assert.equal(outsideRoot.response.status, 404);
+  assert.equal(await readFile(path.join(dataDir, 'files', shareId, '相簿', '旅行', '海邊.JPG'), 'utf8'), 'image');
+});
+
 test('rename, move, copy and batch-operation APIs stay inside NanakoData', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();

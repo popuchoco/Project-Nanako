@@ -22,6 +22,7 @@
 | `GET /api/me` | 是 | 回傳目前使用者。 |
 | `GET /api/shares` | 是 | 列出目前使用者可讀取的分享資料夾與寫入權限。 |
 | `GET /api/files?shareId=…&path=…` | 是 | 需有該分享資料夾讀取權限；列出路徑下項目與 `canWrite`。 |
+| `GET /api/files/search?shareId=…&category=image\|video\|audio\|document&search=…` | 是 | 需有該 Nanako 資料空間讀取權限；在所選資料空間內遞迴搜尋分類檔案，可用檔名片段篩選（最多 180 字元）。不跨分享資料空間、不包含資源回收桶或內部暫存目錄；每次最多檢查 100,000 個項目、回傳 1,000 個結果，回應含 `scannedEntries`、`skippedEntries`、`truncated` 與 `canWrite`。不回傳絕對路徑。 |
 | `POST /api/folders` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "name" }`。 |
 | `POST /api/files/rename` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "newName" }`；只在同一個 Nanako 資料空間內重新命名，不可重新命名根目錄或覆寫同名項目。 |
 | `POST /api/files/move` | 是 | 需有寫入權限；JSON `{ "shareId", "path", "destinationPath" }`；移至同一個 Nanako 資料空間內的既有資料夾，不可移動根目錄、移入自身子資料夾或覆寫同名項目。 |

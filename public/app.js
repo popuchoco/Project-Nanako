@@ -5,7 +5,7 @@ const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: null,
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
-  selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null,
+  selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null, fileLoadSequence: 0,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
   windows: new Map(), windowZ: 10, desktopClockTimer: null,
 };
@@ -457,6 +457,7 @@ function navigateFiles(nextPath) {
 function setFileCategory(category) {
   if (!fileCategoryLabels[category]) return;
   state.fileCategory = category;
+  state.path = '';
   state.selectedItems.clear();
   syncFileManagerNavigation();
   loadFiles();
@@ -475,52 +476,91 @@ function syncFileManagerNavigation() {
     else rootButton.removeAttribute('aria-current');
   }
   $('#file-view-title').textContent = state.fileCategory === 'all' ? (state.path ? state.path.split('/').at(-1) : '我的檔案') : fileCategoryLabels[state.fileCategory];
+  const categoryMode = state.fileCategory !== 'all';
+  $('#view-files').classList.toggle('category-mode', categoryMode);
+  $('#file-batch-toolbar').hidden = categoryMode;
+  $('#file-scope-note').textContent = categoryMode
+    ? `正在搜尋「${fileCategoryLabels[state.fileCategory]}」；範圍是目前 Nanako 資料空間的所有資料夾，不包含資源回收桶。`
+    : '資料只儲存在 NanakoData；檔案管理、相簿、播放器與資源回收桶不會瀏覽其他磁碟或 Windows 個人資料夾。';
+  $('#file-search').placeholder = categoryMode ? '搜尋整個資料空間' : '搜尋目前資料夾';
+  $('#file-search').setAttribute('aria-label', categoryMode ? '搜尋目前 Nanako 資料空間中的檔案名稱' : '搜尋目前資料夾中的檔案名稱');
 }
 
 function updateBatchToolbar() {
   const count = state.selectedItems.size;
   $('#selected-file-count').textContent = count ? `已選取 ${count} 個項目` : '尚未選取項目';
-  for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = !state.canWrite || count === 0;
+  const canSelect = state.fileCategory === 'all' && state.canWrite;
+  for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = !canSelect || count === 0;
   const selectAll = $('#select-all-files');
-  selectAll.setAttribute('aria-label', state.fileCategory === 'all' && !state.fileSearch ? '選取目前資料夾的所有項目' : '選取目前顯示的所有項目');
-  const selectedVisible = state.currentItems.filter((item) => state.selectedItems.has(item.name)).length;
+  selectAll.setAttribute('aria-label', '選取目前資料夾的所有項目');
+  const selectedVisible = canSelect ? state.currentItems.filter((item) => state.selectedItems.has(item.name)).length : 0;
   selectAll.checked = state.currentItems.length > 0 && selectedVisible === state.currentItems.length;
   selectAll.indeterminate = selectedVisible > 0 && selectedVisible < state.currentItems.length;
-  selectAll.disabled = !state.currentItems.length || !state.canWrite;
+  selectAll.disabled = !state.currentItems.length || !canSelect;
 }
 
 async function loadFiles() {
+  const loadSequence = ++state.fileLoadSequence;
   syncFileManagerNavigation();
-  if (!state.shareId) { state.currentItems = []; state.canWrite = false; $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return; }
+  if (!state.shareId) { state.currentItems = []; state.canWrite = false; $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return false; }
   try {
-    const query = new URLSearchParams({ shareId: state.shareId, path: state.path });
-    const { items, canWrite } = await api(`/api/files?${query}`);
-    const visibleItems = filterAndSortFiles(items, { category: state.fileCategory, search: state.fileSearch, sort: state.fileSort });
+    const categoryMode = state.fileCategory !== 'all';
+    if (categoryMode) {
+      $('#file-list').replaceChildren(); $('#empty-files').hidden = false;
+      $('#empty-files strong').textContent = '正在搜尋整個資料空間'; $('#empty-files span').textContent = '搜尋範圍僅限目前 Nanako 資料空間，不包含資源回收桶。';
+    }
+    const query = categoryMode
+      ? new URLSearchParams({ shareId: state.shareId, category: state.fileCategory, search: state.fileSearch })
+      : new URLSearchParams({ shareId: state.shareId, path: state.path });
+    const result = await api(`${categoryMode ? '/api/files/search' : '/api/files'}?${query}`);
+    if (loadSequence !== state.fileLoadSequence) return false;
+    const { items, canWrite } = result;
+    const visibleItems = filterAndSortFiles(items, { category: 'all', sort: state.fileSort });
     state.currentItems = visibleItems;
     state.canWrite = canWrite;
     for (const selected of [...state.selectedItems]) if (!items.some((item) => item.name === selected)) state.selectedItems.delete(selected);
-    renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles);
+    if (categoryMode) {
+      renderBreadcrumb($('#breadcrumb'), '', () => setFileCategory('all'));
+      const categoryCrumb = document.createElement('span'); categoryCrumb.textContent = `${fileCategoryLabels[state.fileCategory]}（整個資料空間）`; categoryCrumb.setAttribute('aria-current', 'page');
+      $('#breadcrumb').append(document.createTextNode(' › '), categoryCrumb);
+    } else renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles);
     const body = $('#file-list'); body.replaceChildren();
+    const message = $('#file-message');
+    message.hidden = true; message.textContent = '';
+    if (categoryMode && result.truncated) {
+      message.textContent = `項目數較多，目前僅顯示前 ${visibleItems.length.toLocaleString('zh-TW')} 個結果；請輸入檔名縮小搜尋範圍。`;
+      message.hidden = false;
+    }
     $('#empty-files').hidden = visibleItems.length !== 0;
-    $('#empty-files strong').textContent = items.length === 0 ? '這裡還沒有檔案' : '沒有符合條件的檔案';
-    $('#empty-files span').textContent = items.length === 0 ? '可以匯入檔案，或先新增資料夾。' : '請調整搜尋文字或檔案分類；目前只搜尋這個資料夾。';
-    $('#new-folder').disabled = !canWrite; $('#file-input').disabled = !canWrite;
+    $('#empty-files strong').textContent = categoryMode
+      ? (items.length === 0 ? `這個資料空間沒有${fileCategoryLabels[state.fileCategory]}` : '沒有符合條件的檔案')
+      : (items.length === 0 ? '這裡還沒有檔案' : '沒有符合條件的檔案');
+    $('#empty-files span').textContent = categoryMode
+      ? (items.length === 0 ? '分類搜尋只會檢查目前 Nanako 資料空間中的一般檔案。' : '請調整搜尋文字；分類搜尋範圍是整個資料空間。')
+      : (items.length === 0 ? '可以匯入檔案，或先新增資料夾。' : '請調整搜尋文字；目前只搜尋這個資料夾。');
+    const canManage = canWrite && !categoryMode;
+    $('#new-folder').disabled = !canManage; $('#file-input').disabled = !canManage;
+    $('#upload-file-label').setAttribute('aria-disabled', String(!canManage));
     for (const item of visibleItems) {
       const row = document.createElement('tr');
       const selectCell = document.createElement('td'); selectCell.className = 'file-select-column';
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selectedItems.has(item.name); checkbox.disabled = !canWrite; checkbox.setAttribute('aria-label', `選取${item.name}`);
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !categoryMode && state.selectedItems.has(item.name); checkbox.disabled = !canManage; checkbox.setAttribute('aria-label', `選取${item.name}`);
       checkbox.addEventListener('change', () => { if (checkbox.checked) state.selectedItems.add(item.name); else state.selectedItems.delete(item.name); updateBatchToolbar(); });
       selectCell.append(checkbox);
       const nameCell = document.createElement('td'); const wrapper = document.createElement('div'); wrapper.className = 'item-name';
       const icon = document.createElement('span'); icon.className = `item-icon${item.isDirectory ? ' folder' : ''}`; icon.setAttribute('aria-hidden', 'true'); icon.textContent = item.isDirectory ? '▰' : '▧';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = item.name;
       if (item.isDirectory) open.addEventListener('click', () => navigateFiles(state.path ? `${state.path}/${item.name}` : item.name));
-      else open.addEventListener('click', () => openFile(item));
+      else open.addEventListener('click', () => categoryMode ? openCatalogFile(item) : openFile(item));
       wrapper.append(icon, open); nameCell.append(wrapper);
+      if (categoryMode) {
+        const location = document.createElement('small'); location.className = 'item-location'; location.textContent = item.path;
+        nameCell.append(location);
+      }
       const dateCell = document.createElement('td'); dateCell.textContent = formatDate(item.modifiedAt);
       const sizeCell = document.createElement('td'); sizeCell.textContent = item.isDirectory ? '資料夾' : formatSize(item.size);
       const actionCell = document.createElement('td');
-      if (canWrite) {
+      if (canManage) {
         const actions = document.createElement('div'); actions.className = 'row-actions';
         const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'text-action'; rename.textContent = '重新命名'; rename.addEventListener('click', () => renameItem(item.name)); actions.append(rename);
         if (!item.name.toLocaleLowerCase('en-US').endsWith('.zip')) {
@@ -536,7 +576,31 @@ async function loadFiles() {
       row.append(selectCell, nameCell, dateCell, sizeCell, actionCell); body.append(row);
     }
     updateBatchToolbar();
-  } catch (error) { notify(error.message, true); }
+    return true;
+  } catch (error) {
+    if (loadSequence !== state.fileLoadSequence) return false;
+    state.currentItems = []; state.canWrite = false; state.selectedItems.clear();
+    $('#file-list').replaceChildren(); $('#empty-files').hidden = false;
+    $('#empty-files strong').textContent = '無法載入檔案'; $('#empty-files span').textContent = '請確認資料空間權限或重新整理後再試。';
+    $('#new-folder').disabled = true; $('#file-input').disabled = true;
+    updateBatchToolbar(); notify(error.message, true); return false;
+  }
+}
+
+async function openCatalogFile(item) {
+  const expectedShare = state.shareId;
+  const parts = item.path.split('/');
+  const name = parts.pop();
+  const expectedPath = parts.join('/');
+  state.path = expectedPath;
+  state.fileCategory = 'all';
+  state.fileSearch = '';
+  state.selectedItems.clear();
+  $('#file-search').value = '';
+  syncFileManagerNavigation();
+  if (!await loadFiles() || state.shareId !== expectedShare || state.path !== expectedPath || state.fileCategory !== 'all') return;
+  const resolved = state.currentItems.find((entry) => !entry.isDirectory && entry.name === name);
+  if (resolved) openFile(resolved);
 }
 
 function joinedPath(name) { return state.path ? `${state.path}/${name}` : name; }
@@ -1456,9 +1520,10 @@ for (const selector of ['#share-select', '#trash-share-select', '#album-share-se
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
 $('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
+$('#upload-file-label').addEventListener('click', (event) => { if ($('#file-input').disabled) { event.preventDefault(); event.stopPropagation(); } });
 $('#file-search').addEventListener('input', () => {
   clearTimeout(state.fileSearchTimer);
-  state.fileSearchTimer = setTimeout(() => { state.fileSearch = $('#file-search').value; state.selectedItems.clear(); loadFiles(); }, 180);
+  state.fileSearchTimer = setTimeout(() => { state.fileSearch = $('#file-search').value; state.selectedItems.clear(); loadFiles(); }, state.fileCategory === 'all' ? 180 : 350);
 });
 $('#file-sort').addEventListener('change', (event) => { state.fileSort = event.currentTarget.value; loadFiles(); });
 $('#select-all-files').addEventListener('change', (event) => {

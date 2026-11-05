@@ -10,7 +10,7 @@ export function mediaKind(name) {
   return Object.entries(mediaExtensions).find(([, extensions]) => extensions.has(extension))?.[0] || '';
 }
 
-function fileCategory(name) {
+export function fileCategory(name) {
   const kind = mediaKind(name);
   if (kind) return kind;
   const extension = name.split('.').at(-1)?.toLowerCase() || '';
