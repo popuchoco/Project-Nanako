@@ -33,7 +33,7 @@
 
 - 已採用 [zip.js](https://github.com/gildas-lormeau/zip.js) `@zip.js/zip.js` 2.24.0（BSD-3-Clause）實作串流 ZIP 建立與解壓，支援 Zip64 與隨機讀取；授權及封裝資訊列於 `THIRD_PARTY.md`。
 - 本版未採用 JSZip、Archiver 或 yauzl，亦未複製其原始碼。
-- 目前已驗證一般小型檔案建立、解壓與 ZIP Slip 拒絕；大型檔案效能／記憶體、取消、中途寫入失敗、錯誤 CRC、損毀封存檔與 Windows 檔案總管互通性尚待驗證。
+- 目前已驗證一般小型檔案建立／解壓、ZIP Slip 拒絕、修改檔案內容後的 CRC 拒絕／暫存清理，以及 32 MiB 隨機內容建立／解壓時 process RSS 增量低於 24 MiB 的本機測試。更大型檔案與其他環境的記憶體／效能、取消、中途寫入失敗、多種損毀封存檔與 Windows 檔案總管互通性尚待驗證。
 
 ### B. 加密空間／檔案上鎖
 

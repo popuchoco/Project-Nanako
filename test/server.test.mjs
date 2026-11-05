@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
 import { startServer } from '../src/server.mjs';
@@ -815,6 +816,72 @@ test('ZIP Slip entries are rejected before extraction writes outside Nanako stor
   assert.equal(result.body.error, 'invalid_archive');
   assert.equal(await readFile(path.join(dataDir, 'files', 'outside.txt')).catch(() => null), null);
   assert.equal(await readFile(path.join(shareRoot, 'unsafe', 'outside.txt')).catch(() => null), null);
+});
+
+test('ZIP CRC corruption is rejected and leaves no partial extraction directory', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const shareRoot = path.join(dataDir, 'files', shareId);
+  const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
+  await writer.add('payload.txt', new TextReader('CRC 驗證必須拒絕已修改的內容'));
+  const archiveBlob = await writer.close();
+  const bytes = Buffer.from(await archiveBlob.arrayBuffer());
+  assert.equal(bytes.readUInt32LE(0), 0x04034b50);
+  const dataOffset = 30 + bytes.readUInt16LE(26) + bytes.readUInt16LE(28);
+  bytes[dataOffset] ^= 0x01;
+  await writeFile(path.join(shareRoot, 'corrupted.zip'), bytes);
+
+  const result = await request('/api/archive/extract', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shareId, path: 'corrupted.zip' }),
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, 'invalid_archive');
+  assert.equal(await readFile(path.join(shareRoot, 'corrupted', 'payload.txt')).catch(() => null), null);
+  const entries = await readdir(shareRoot);
+  assert.ok(!entries.some((name) => name.startsWith('.localnas-extract-')));
+});
+
+test('large ZIP create and extract stream file data with bounded RSS growth', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const sourcePath = path.join(dataDir, 'files', shareId, 'large-random.bin');
+  const file = await open(sourcePath, 'wx');
+  const blockBytes = 1024 * 1024;
+  try {
+    for (let index = 0; index < 32; index += 1) {
+      let block = randomBytes(blockBytes);
+      let offset = 0;
+      while (offset < block.length) {
+        const { bytesWritten } = await file.write(block, offset, block.length - offset);
+        offset += bytesWritten;
+      }
+      block = null;
+    }
+  } finally { await file.close(); }
+
+  const baselineRss = process.memoryUsage().rss;
+  let peakRss = baselineRss;
+  const sample = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 10);
+  sample.unref();
+  try {
+    const created = await request('/api/archive/create', {
+      method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.bin' }),
+    });
+    assert.equal(created.response.status, 201, created.body.message);
+    assert.ok(created.body.size > 30 * 1024 * 1024);
+    const extracted = await request('/api/archive/extract', {
+      method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.zip' }),
+    });
+    assert.equal(extracted.response.status, 201, extracted.body.message);
+    assert.equal((await stat(path.join(dataDir, 'files', shareId, 'large-random', 'large-random.bin'))).size, 32 * blockBytes);
+  } finally {
+    clearInterval(sample);
+    peakRss = Math.max(peakRss, process.memoryUsage().rss);
+  }
+  assert.ok(peakRss - baselineRss < 24 * 1024 * 1024,
+    `串流壓縮／解壓的 RSS 增量應低於 24 MiB；實測 ${((peakRss - baselineRss) / 1024 / 1024).toFixed(1)} MiB`);
 });
 
 test('directory ZIP archives preserve nested files and empty directories', async (t) => {
