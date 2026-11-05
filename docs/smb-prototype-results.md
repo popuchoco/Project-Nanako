@@ -10,6 +10,14 @@ SMB 引擎至少要能在 Windows 執行、可安全綁定指定網卡、支援�
 
 ## 候選測試結果
 
+### `paltaio/rust-smb-server`（`smb-server` crate 0.8.0）— 新增待驗證候選
+
+- 來源：[專案原始碼](https://github.com/paltaio/rust-smb-server)、[0.8.0 API 文件](https://docs.rs/smb-server/0.8.0/smb_server/)；MIT 授權，尚未匯入本專案。
+- 文件顯示它提供 SMB 2.0.2 至 3.1.1 over TCP、NTLMv2、逐使用者／逐分享讀寫權限、SMB 簽章／加密選項、執行期分享與授權更新，以及以單一根目錄為界的 `LocalFsBackend`。這些能力與 Nanako 的 managed share 模型相符，值得優先做 Windows 概念驗證。
+- 尚不能視為通過：本次環境沒有 Rust toolchain，未執行 `cargo test`、Windows 編譯、SMB 用戶端互通、IP 綁定或停止服務測試；文件列出的限制包括 Kerberos、oplocks／directory leases、DFS、alternate data streams、reparse points 等。
+- 身分整合仍有缺口：crate 的帳號設定介面需要 SMB 密碼，而 Nanako 只保存登入密碼的 scrypt verifier，無法還原原始密碼。若無法新增安全的驗證介面，需設計獨立 SMB 密碼的設定、撤銷與持久化；不得把明文 SMB 密碼寫入 SQLite 或一般設定檔。
+- 決定：加入 Windows POC 候選，不採用、不開放監聽，也不加入 `THIRD_PARTY.md`。先驗證 Windows 建置、localhost 上 SMB2/3 認證與授權、符號連結／路徑隔離、檔案讀寫／改名／鎖定、簽章／加密與正常停止；再測 Windows、macOS Finder 及 Linux `smbclient`。TCP 445 與 Windows `LanmanServer` 衝突、標準 Windows 用戶端替代連接埠限制仍須獨立解決。
+
 ### `sonroyaalmerol/go-smb-server`
 
 - 檢視版本：`d07dc723a2926177b4bc20c806d95cb2c3b1c70a`
@@ -42,4 +50,4 @@ SMB 引擎至少要能在 Windows 執行、可安全綁定指定網卡、支援�
 
 ## 下一個實作閘門
 
-先用可由 Nanako 維護的引擎原型完成 Windows 上的 SMB2/3 互通、逐帳號授權、重新解析點防護及指定 IP 綁定測試，再把它接到受控的啟動／停止生命週期。候選未通過上述條件前，不開放 TCP 445、不變更 Windows 內建 SMB 服務或防火牆，也不把候選原始碼列入 `THIRD_PARTY.md`。
+優先以 `paltaio/rust-smb-server` 0.8.0 完成 Windows 編譯與 localhost POC；若 Windows 支援、授權介面或用戶端互通任一閘門失敗，回到 Windows 內建 SMB Server 與其他可維護候選重新比較。任何引擎都須完成逐帳號授權、重新解析點防護、指定 IP 綁定、簽章／加密及正常停機測試，再接入受控生命週期。候選未通過前，不開放 TCP 445、不變更 Windows 內建 SMB 服務或防火牆，也不把候選原始碼列入 `THIRD_PARTY.md`。
