@@ -26,7 +26,7 @@ async function setupServer(t, options = {}) {
     const shares = await request('/api/shares', { headers: { Cookie: cookie } });
     return { cookie, shareId: shares.body.shares[0].id, user: body.user };
   }
-  return { base, dataDir, request, setup };
+  return { base, dataDir, server, request, setup };
 }
 
 test('renderer ES modules are served with a JavaScript MIME type', async (t) => {
@@ -62,6 +62,174 @@ test('setup, login, file transfer, recycle bin and restore work locally', async 
   assert.equal(restore.response.status, 200);
   const restored = await request(`/api/download?${downloadQuery}`, { headers: auth });
   assert.equal(restored.body, '本機測試內容');
+});
+
+test('vault imports only Nanako files, stores opaque ciphertext and serves authenticated byte ranges', async (t) => {
+  const { base, dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const sourceBytes = Buffer.from(Array.from({ length: 4096 }, (_, index) => index % 251));
+  const upload = await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'vault-check.png' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: sourceBytes,
+  });
+  assert.equal(upload.response.status, 201);
+  const setupVault = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-test-password-2026' }),
+  });
+  assert.equal(setupVault.response.status, 201);
+
+  const outside = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ shareId, path: '../outside.png' }),
+  });
+  assert.equal(outside.response.status, 400);
+  const imported = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ shareId, path: 'vault-check.png' }),
+  });
+  assert.equal(imported.response.status, 201, imported.body.message);
+  const { id, name, size } = imported.body.item;
+  assert.equal(name, 'vault-check.png');
+  assert.equal(size, sourceBytes.length);
+  assert.equal(imported.body.item.mediaType, 'image/png');
+
+  const sourcePath = path.join(dataDir, 'files', shareId, 'vault-check.png');
+  await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
+  const encryptedPath = path.join(dataDir, '.nanako-vault', user.id, `${id}.nkv`);
+  const ciphertext = await readFile(encryptedPath);
+  assert.equal(ciphertext.includes(sourceBytes), false);
+  assert.equal(ciphertext.subarray(0, 8).toString('ascii'), 'NKVLT01\0');
+  const indexDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
+  try {
+    const index = indexDb.prepare('SELECT metadata_json FROM vault_objects WHERE id = ?').get(id);
+    assert.equal(index.metadata_json.includes('vault-check.png'), false);
+    assert.equal(index.metadata_json.includes('vault-test-password-2026'), false);
+  } finally { indexDb.close(); }
+
+  const list = await request('/api/vault/objects', { headers: { Cookie: cookie } });
+  assert.equal(list.response.status, 200);
+  assert.equal(list.body.items[0].name, 'vault-check.png');
+  const contentUrl = `/api/vault/objects/${id}/content`;
+  const fullResponse = await fetch(`${base}${contentUrl}`, { headers: { Cookie: cookie } });
+  assert.equal(fullResponse.status, 200);
+  assert.deepEqual(Buffer.from(await fullResponse.arrayBuffer()), sourceBytes);
+  const rangeResponse = await fetch(`${base}${contentUrl}`, { headers: { Cookie: cookie, Range: 'bytes=300-599' } });
+  assert.equal(rangeResponse.status, 206);
+  const rangeBytes = Buffer.from(await rangeResponse.arrayBuffer());
+  assert.equal(rangeResponse.headers.get('content-range'), `bytes 300-599/${sourceBytes.length}`);
+  assert.deepEqual(rangeBytes, sourceBytes.subarray(300, 600));
+
+  await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'read-only.png' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: Buffer.from('read only source'),
+  });
+  await request('/api/users', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ username: 'vault-reader', password: 'vault-reader-password-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }),
+  });
+  const readerLogin = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'vault-reader', password: 'vault-reader-password-2026' }),
+  });
+  const readerCookie = readerLogin.response.headers.get('set-cookie').split(';')[0];
+  const otherUserContent = await request(contentUrl, { headers: { Cookie: readerCookie } });
+  assert.equal(otherUserContent.response.status, 404);
+  const deniedImport = await request('/api/vault/objects/import', {
+    method: 'POST', headers: { Cookie: readerCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shareId, path: 'read-only.png' }),
+  });
+  assert.equal(deniedImport.response.status, 403);
+  assert.equal(await readFile(path.join(dataDir, 'files', shareId, 'read-only.png'), 'utf8'), 'read only source');
+
+  const unconfirmedDelete = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({}) });
+  assert.equal(unconfirmedDelete.response.status, 400);
+  const deleted = await request(`/api/vault/objects/${id}`, { method: 'DELETE', headers: auth, body: JSON.stringify({ confirmText: '永久刪除' }) });
+  assert.equal(deleted.response.status, 200);
+  await assert.rejects(readFile(encryptedPath), { code: 'ENOENT' });
+  const missingContent = await request(contentUrl, { headers: { Cookie: cookie } });
+  assert.equal(missingContent.response.status, 404);
+
+  await request('/api/logout', { method: 'POST', headers: { Cookie: cookie } });
+  const adminLogin = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  const reauthenticatedCookie = adminLogin.response.headers.get('set-cookie').split(';')[0];
+  const relocked = await request('/api/vault/status', { headers: { Cookie: reauthenticatedCookie } });
+  assert.equal(relocked.body.unlocked, false);
+  const wrongPasswords = await Promise.all(Array.from({ length: 5 }, () => request('/api/vault/unlock', {
+    method: 'POST', headers: { Cookie: reauthenticatedCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'incorrect-vault-password-2026' }),
+  })));
+  assert.ok(wrongPasswords.every((result) => result.response.status === 401));
+  const throttled = await request('/api/vault/unlock', {
+    method: 'POST', headers: { Cookie: reauthenticatedCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'vault-test-password-2026' }),
+  });
+  assert.equal(throttled.response.status, 429);
+
+  const lockedList = await request('/api/vault/objects', { headers: { Cookie: reauthenticatedCookie } });
+  assert.equal(lockedList.response.status, 423);
+});
+
+test('vault is locked again after server shutdown and restart', async (t) => {
+  const { base, dataDir, server, request, setup } = await setupServer(t);
+  const { cookie } = await setup();
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'vault-restart-password-2026' }),
+  });
+  assert.equal(created.response.status, 201);
+  await server.close();
+
+  const restarted = await startServer({ dataDir, host: '127.0.0.1', port: 0 });
+  try {
+    const restartedBase = `http://127.0.0.1:${restarted.port}`;
+    const login = await fetch(`${restartedBase}/api/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+    });
+    assert.equal(login.status, 200);
+    const restartedCookie = login.headers.get('set-cookie').split(';')[0];
+    const status = await fetch(`${restartedBase}/api/vault/status`, { headers: { Cookie: restartedCookie } });
+    assert.deepEqual(await status.json(), { configured: true, unlocked: false });
+  } finally { await restarted.close(); }
+});
+
+test('locking the vault cancels an in-flight media stream before clearing the key', async (t) => {
+  const { base, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const upload = await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'lock-stream.mp4' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: Buffer.alloc(8 * 1024 * 1024, 0x52),
+  });
+  assert.equal(upload.response.status, 201);
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-lock-password-2026' }),
+  });
+  assert.equal(created.response.status, 201);
+  const imported = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'lock-stream.mp4' }),
+  });
+  assert.equal(imported.response.status, 201, imported.body.message);
+
+  const streaming = await fetch(`${base}/api/vault/objects/${imported.body.item.id}/content`, { headers: { Cookie: cookie } });
+  assert.equal(streaming.status, 200);
+  const lockPromise = request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+  let timeout;
+  const locked = await Promise.race([
+    lockPromise,
+    new Promise((resolve) => { timeout = setTimeout(() => resolve(null), 3000); }),
+  ]);
+  clearTimeout(timeout);
+  if (!locked) {
+    await streaming.body.cancel().catch(() => {});
+    await lockPromise;
+  }
+  assert.ok(locked, '手動鎖定應中止進行中的媒體串流，而非無限等待用戶端讀取');
+  assert.equal(locked.response.status, 200);
+  const status = await request('/api/vault/status', { headers: { Cookie: cookie } });
+  assert.equal(status.body.unlocked, false);
+  await streaming.body.cancel().catch(() => {});
 });
 
 test('file category search covers one Nanako share recursively and honours read permissions', async (t) => {

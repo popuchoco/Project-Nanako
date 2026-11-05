@@ -22,11 +22,12 @@ Renderer（public/） ─── /api/* ───► HTTP 路由與驗證／授�
                                         └─ 本機檔案系統（含 Range 媒體串流）
 ```
 
-Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口與本機狀態；應用程式視窗由共用 HTML 範本動態建立，每個應用程式各有一個獨立視窗，並以視窗 Map 管理開啟／最小化狀態、作用中視窗與 z-order。工作列與 Dock 會同步呈現視窗；支援拖曳、方向鍵移動、最小化、最大化／還原、關閉及從工作列還原。視窗生命週期操作會透過本機 `/api/activity` 記錄。功能面板開啟時由隱藏的內容 bank 移入該應用程式視窗，關閉時移回，既有檔案資料操作仍由同一組本機 API 及權限檢查處理。這是應用程式自己的 UI，不會呼叫 Windows Shell。完整操作規則見[桌面互動體驗規劃](ux-interaction-plan.md)。檔案管理支援重新命名、移動、串流複製與逐項批次操作；複製會使用 Nanako 受管理目錄中的隱藏暫存項目，完成後才發布至目的地。重複檔案功能以 Node.js 內建 `crypto` 串流計算 SHA-256，並在確認後將副本移至同一個 Nanako 資料空間的資源回收桶。一般檔案 ZIP 串流建立／解壓縮原型及本機操作紀錄已實作；加密空間仍在規劃，現有一般檔案不能視為已加密。
+Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口與本機狀態；應用程式視窗由共用 HTML 範本動態建立，每個應用程式各有一個獨立視窗，並以視窗 Map 管理開啟／最小化狀態、作用中視窗與 z-order。工作列與 Dock 會同步呈現視窗；支援拖曳、方向鍵移動、最小化、最大化／還原、關閉及從工作列還原。視窗生命週期操作會透過本機 `/api/activity` 記錄。功能面板開啟時由隱藏的內容 bank 移入該應用程式視窗，關閉時移回，既有檔案資料操作仍由同一組本機 API 及權限檢查處理。這是應用程式自己的 UI，不會呼叫 Windows Shell。完整操作規則見[桌面互動體驗規劃](ux-interaction-plan.md)。檔案管理支援重新命名、移動、串流複製與逐項批次操作；複製會使用 Nanako 受管理目錄中的隱藏暫存項目，完成後才發布至目的地。重複檔案功能以 Node.js 內建 `crypto` 串流計算 SHA-256，並在確認後將副本移至同一個 Nanako 資料空間的資源回收桶。一般檔案 ZIP 串流建立／解壓縮原型及本機操作紀錄已實作。加密空間是未完成原型：只有明確移入的檔案才會轉成 `.nanako-vault` 密文物件，其他 Nanako 檔案仍為一般檔案。
 
 - `electron/main.mjs`：桌面生命週期、視窗安全設定、啟停 HTTP 服務。
 - `src/server.mjs`：本機 HTTP API、登入、權限檢查、操作紀錄、檔案／資源回收桶／ZIP 作業、靜態檔案。
 - `src/archives.mjs`：限制 NanakoData 路徑範圍的 ZIP 串流建立與解壓縮、中央目錄／路徑／CRC／大小驗證。
+- `src/vault-crypto.mjs`：scrypt master-key 包覆、HKDF 物件金鑰派生、AES-256-GCM 區塊串流及加密中繼資料原型；金鑰只由 Node.js 主程序使用。
 - `src/duplicates.mjs`：限定 NanakoData 範圍的檔案列舉、串流 SHA-256 雜湊、進度回報、取消與重複群組整理。
 - `src/file-catalog.mjs`：限定單一 Nanako 資料空間、跳過內部目錄及符號連結的圖片／影音／文件遞迴索引；以目錄串流方式列舉，單次最多檢查 100,000 個項目並回傳 1,000 項。
 - `src/run.mjs`：供開發及測試使用的命令列啟動器。
@@ -40,7 +41,10 @@ Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口與本
   metadata.sqlite       使用者、分享資料夾、權限、工作階段、操作紀錄與應用程式設定
   files/<share-id>/     分享資料夾內容
   trash/<share-id>/<id> 待清除或還原的檔案
+  .nanako-vault/<user-id>/<object-id>.nkv  各使用者的不透明密文物件
 ```
+
+SQLite 的 `vaults` 表保存以加密空間密碼包覆的 master key；`vault_objects` 只保存使用者 ID、隨機物件 UUID 與加密後的檔名／相對路徑／大小／MIME。解鎖金鑰留在 Node.js 程序記憶體，不傳給 Renderer；圖片／音訊／影片由受授權 API 串流解密，不建立明文暫存檔。手動鎖定會取消並清理執行中的加解密串流，再清除金鑰參照。這仍是原型：密文索引提交與來源移除間若程序突然中止，可能同時留下明文與密文；尚未完成啟動復原、備份及獨立安全審查。
 
 Windows 可攜式封裝會將設定檔、工作階段及資料分別放在執行檔旁 `NanakoData/profile`、`NanakoData/session`、`NanakoData/data`。Electron 開發與命令列模式會使用專案目錄內的 `NanakoData/data`。可攜式執行檔需放在目前使用者可寫入的位置；程式不提供資料目錄或磁碟切換選項。部署前仍須確定資料備份／還原與升級流程。
 
@@ -61,13 +65,13 @@ Windows 可攜式封裝會將設定檔、工作階段及資料分別放在執行
 
 尚未實作密碼重設、多因素驗證、使用者刪除、API token 或遠端授權。Windows 系統管理員權限狀態可以檢視，但需要管理員身分安裝的發行安裝程式及一般帳號的權限分離流程仍待設計；可攜式版本不會自行安裝服務或提升權限。操作紀錄由本機管理員控制保留與刪除，不是防竄改帳本；不得將本原型的工作階段設計直接用於對外網路服務。
 
-## 加密與封存演進（尚未實作）
+## 加密與封存演進（原型）
 
-加密空間提案將 vault 密文物件、加密中繼資料與一般 Nanako 檔案區隔；解鎖金鑰由主程序控管，Renderer 不接觸金鑰。格式候選為 Node.js 內建 `crypto` 提供的認證加密原語，並以固定大小區塊維持大檔案串流與受控 Range 讀取。這些只是候選設計，須先完成威脅模型、nonce／AAD 格式審查、復原 UX、篡改測試與 crash-consistency 測試。
+加密空間原型使用 Node.js 內建 `crypto`：scrypt 包覆 master key，HKDF 依使用者與隨機物件 UUID 派生獨立內容／中繼資料金鑰，內容採 1 MiB AES-256-GCM 區塊串流，中繼資料以 AES-256-GCM 加密。UI 僅能從既有 Nanako 資料空間移入檔案；成功驗證後移除來源路徑。解鎖金鑰由主程序控管，Renderer 不接觸 master key；登出、手動鎖定、閒置或服務關閉會取消並清理執行中的串流，再撤銷可清除的金鑰參照。錯誤密碼、篡改、隔離及 NanakoData 範圍已有測試；復原 UX、故障注入、nonce／AAD 格式審查和獨立安全審查尚未完成，不能作為正式保險箱使用。
 
 ZIP 原型先限定一般 Nanako 檔案並以串流方式建立／解壓，進出路徑固定於 NanakoData。建立與解壓都先寫入範圍內的暫存位置，驗證成功後才提交；伺服器拒絕路徑跳脫、符號連結、Zip Slip、衝突路徑及超限項目。大檔案效能、取消與 Windows 檔案總管互通性仍待驗證。vault 與 ZIP 初期分開，避免誤產生明文暫存。
 
-詳細階段、API 草案、金鑰模型候選及驗收條件見 [加密空間與 ZIP 規劃](feature-plan-encryption-and-archives.md)、[ADR-0009](decisions/ADR-0009-encrypted-vault-design.md) 與 [ADR-0010](decisions/ADR-0010-zip-archive-design.md)。
+詳細階段、原型 API、金鑰模型及驗收條件見 [加密空間與 ZIP 規劃](feature-plan-encryption-and-archives.md)、[ADR-0009](decisions/ADR-0009-encrypted-vault-design.md) 與 [ADR-0010](decisions/ADR-0010-zip-archive-design.md)。
 
 ## 網路與 API 演進
 

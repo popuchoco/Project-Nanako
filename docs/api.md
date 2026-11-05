@@ -40,9 +40,17 @@
 | `GET /api/network` | 是 | 回報目前本機服務資訊與網路介面清單；不會啟用區域網路連線或改變網路設定。 |
 | `GET /api/smb/status` | 是 | 僅管理員；唯讀檢查 Windows `LanmanServer` 服務、TCP 445 是否正在監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。此為前置診斷，不會建立分享、啟停 Windows 服務或修改防火牆；`nanakoSmbReady` 目前固定為 `false`。 |
 | `GET /api/system` | 是 | 僅管理員；查看本機電腦名稱、Windows 版本／組建、處理器、記憶體、Nanako 資料磁碟容量、網路介面及目前 Windows 身分、系統管理員群組與程序提升狀態。 |
-| `POST /api/activity` | 是 | 記錄使用者開啟／切換 Nanako 畫面及視窗操作；JSON `{ "view", "action"? }`。`action` 可為 `open`、`focus`、`minimize`、`maximize`、`restore`、`close`、`move`；省略時視為 `open`。僅接受已知畫面與操作代碼，管理畫面限管理員。 |
+| `POST /api/activity` | 是 | 記錄使用者開啟／切換 Nanako 畫面及視窗操作；JSON `{ "view", "action"? }`。`action` 可為 `open`、`focus`、`minimize`、`maximize`、`restore`、`close`、`move`、`preview`；省略時視為 `open`。僅接受已知畫面與操作代碼，管理畫面限管理員。 |
 | `POST /api/archive/create` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，在來源旁建立同名 ZIP。來源、暫存與輸出都限制在 Nanako 資料空間。 |
 | `POST /api/archive/extract` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，只接受 ZIP，解壓至同名新資料夾；不覆寫現有資料。拒絕路徑跳脫、符號連結、加密 ZIP、衝突路徑及超出大小／項目數限制的封存檔。 |
+| `GET /api/vault/status` | 是 | 回傳目前使用者的加密空間是否已建立及已解鎖；不回傳金鑰或敏感中繼資料。 |
+| `POST /api/vault/setup` | 是 | JSON `{ "password" }`；為目前 Nanako 使用者建立獨立 vault master key 與密碼包覆資料。加密密碼需 12–256 字元；目前沒有復原或重設機制。 |
+| `POST /api/vault/unlock` | 是 | JSON `{ "password" }`；錯誤密碼回傳 `401`，錯誤 5 次後節流 15 分鐘並回傳 `429`。解鎖金鑰只在服務程序記憶體中，閒置 15 分鐘後鎖定。 |
+| `POST /api/vault/lock` | 是 | 立即鎖定目前使用者加密空間；會取消進行中的加密／解密串流，作業清理完成後清除金鑰參照。 |
+| `GET /api/vault/objects` | 是 | 需要加密空間已解鎖；只列出目前使用者的加密物件及解密後中繼資料。未解鎖回傳 `423`。 |
+| `POST /api/vault/objects/import` | 是 | 需要加密空間已解鎖，且使用者對來源 Nanako 分享有讀寫權限；JSON `{ "shareId", "path" }`。只接受 NanakoData 中的一般檔案，串流加密並驗證後移除來源路徑；路徑外的檔案／磁碟不接受。 |
+| `GET /api/vault/objects/{objectId}/content` | 是 | 需要已解鎖且該物件屬於目前使用者；只提供允許清單中的圖片／音訊／影片 MIME，支援單一 byte-range。每個被讀取區塊都需通過 GCM 驗證；不產生明文暫存檔。 |
+| `DELETE /api/vault/objects/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "永久刪除" }`；由伺服器再次驗證確認文字並永久刪除密文物件，不移至資源回收桶。 |
 | `POST /api/duplicates/scan` | 是 | 需有分享資料夾讀取權限；JSON `{ "shareId" }`；以非同步工作掃描 Nanako 管理範圍，回傳 `202` 與 `scanId`。每次最多檢查 100,000 個項目；同一位使用者同時僅可執行一項掃描。 |
 | `GET /api/duplicates/scan?scanId=…` | 是 | 僅掃描建立者且仍有讀取權限者可讀取進度／結果；回傳狀態、進度、統計與已驗證重複群組。 |
 | `DELETE /api/duplicates/scan?scanId=…` | 是 | 僅掃描建立者可取消進行中的掃描。 |

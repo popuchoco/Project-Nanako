@@ -8,12 +8,13 @@ const state = {
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
   selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null, fileLoadSequence: 0,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
+  vaultSourceShareId: '', vaultSourcePath: '', vaultSourceItems: [], vaultItems: [], vaultPendingImport: null, vaultPendingDelete: null, vaultPreviewId: '', vaultLockRequest: null, vaultStatusTimer: null,
   windows: new Map(), windowZ: 10, desktopClockTimer: null,
 };
 const appDefinitions = {
   files: { name: '檔案管理', icon: '▤' }, duplicates: { name: '檔案去重', icon: '⧉' },
   album: { name: '相簿', icon: '▧' }, player: { name: '播放器', icon: '▶' },
-  trash: { name: '資源回收桶', icon: '⌫' }, users: { name: '使用者與權限', icon: '♙', adminOnly: true },
+  trash: { name: '資源回收桶', icon: '⌫' }, vault: { name: '加密空間', icon: '◉' }, users: { name: '使用者與權限', icon: '♙', adminOnly: true },
   computer: { name: '儲存空間', icon: '▣' }, system: { name: '電腦資訊', icon: '▦', adminOnly: true },
   settings: { name: '系統設定與紀錄', icon: '⚙', adminOnly: true }, network: { name: '網路狀態', icon: '⌁' },
 };
@@ -155,6 +156,19 @@ async function loadShares() {
     element.value = state.shareId;
     element.disabled = state.shares.length === 0;
   }
+  const vaultSources = state.shares.filter((share) => share.canWrite);
+  const vaultSource = $('#vault-source-share');
+  if (vaultSource) {
+    vaultSource.replaceChildren(...vaultSources.map((share) => {
+      const option = document.createElement('option'); option.value = share.id; option.textContent = share.name; return option;
+    }));
+    if (!vaultSources.some((share) => share.id === state.vaultSourceShareId)) {
+      state.vaultSourceShareId = vaultSources[0]?.id || '';
+      state.vaultSourcePath = '';
+    }
+    vaultSource.value = state.vaultSourceShareId;
+    vaultSource.disabled = vaultSources.length === 0;
+  }
   syncShareSelectors();
   updateDesktopWidget();
   renderPermissionOptions();
@@ -181,6 +195,7 @@ function loadView(view) {
   if (view === 'player') { void loadPlayer(); if (!state.mediaCompatibilityLoaded) void loadMediaCompatibility(); }
   if (view === 'trash') void loadTrash();
   if (view === 'users') void loadUsers();
+  if (view === 'vault') void loadVault();
   if (view === 'computer') void loadComputer();
   if (view === 'system') void loadSystem();
   if (view === 'settings') { void loadAuditSettings(); void loadAuditLogs(); }
@@ -352,6 +367,11 @@ function closeWindow(view) {
   const entry = state.windows.get(view);
   if (!entry) return;
   recordWindowAction(view, 'close');
+  if (view === 'vault') {
+    clearVaultContents();
+    clearInterval(state.vaultStatusTimer); state.vaultStatusTimer = null;
+    state.vaultLockRequest = api('/api/vault/lock', { method: 'POST' }).catch(() => {}).finally(() => { state.vaultLockRequest = null; });
+  }
   if (view === 'player') resetPlayer();
   if (view === 'album') {
     state.albumLoadSequence += 1;
@@ -1054,6 +1074,171 @@ async function cleanDuplicateFiles(event) {
   }
 }
 
+function renderVaultStatus(status) {
+  $('#vault-setup-panel').hidden = status.configured;
+  $('#vault-unlock-panel').hidden = !status.configured || status.unlocked;
+  $('#vault-open-panel').hidden = !status.unlocked;
+  $('#vault-lock-button').hidden = !status.unlocked;
+  $('#vault-content-panel').hidden = !status.unlocked;
+  if (!status.unlocked) {
+    for (const selector of ['#vault-import-dialog', '#vault-delete-dialog']) {
+      const dialog = $(selector); if (dialog.open) dialog.close();
+    }
+    clearVaultContents();
+  }
+}
+
+function clearVaultPreview() {
+  const content = $('#vault-preview-content');
+  for (const media of content.querySelectorAll('audio, video')) { media.pause(); media.removeAttribute('src'); media.replaceChildren(); media.load(); }
+  content.replaceChildren();
+  $('#vault-preview-panel').hidden = true;
+  $('#vault-preview-message').hidden = true;
+  state.vaultPreviewId = '';
+}
+
+function clearVaultContents() {
+  clearVaultPreview();
+  state.vaultItems = [];
+  state.vaultSourceItems = [];
+  state.vaultSourcePath = '';
+  state.vaultPendingImport = null;
+  state.vaultPendingDelete = null;
+  $('#vault-object-list').replaceChildren();
+  $('#vault-source-list').replaceChildren();
+  $('#vault-object-empty').hidden = true;
+  $('#vault-source-path').textContent = '主資料夾';
+  $('#vault-import-description').textContent = '';
+  $('#vault-delete-description').textContent = '';
+}
+
+function vaultSourceLocation() {
+  return state.vaultSourcePath || '主資料夾';
+}
+
+async function loadVaultSource() {
+  const list = $('#vault-source-list');
+  const empty = $('#vault-source-empty');
+  list.replaceChildren();
+  $('#vault-source-path').textContent = vaultSourceLocation();
+  $('#vault-source-up').disabled = !state.vaultSourcePath;
+  if (!state.vaultSourceShareId) { empty.hidden = false; return; }
+  try {
+    const query = new URLSearchParams({ shareId: state.vaultSourceShareId, path: state.vaultSourcePath });
+    const result = await api(`/api/files?${query}`);
+    state.vaultSourceItems = result.items;
+    for (const item of result.items) {
+      const row = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      if (item.isDirectory) {
+        const open = document.createElement('button'); open.type = 'button'; open.className = 'vault-file-name'; open.textContent = `▸ ${item.name}`;
+        open.addEventListener('click', () => { state.vaultSourcePath = [state.vaultSourcePath, item.name].filter(Boolean).join('/'); loadVaultSource(); });
+        nameCell.append(open);
+      } else nameCell.textContent = item.name;
+      const sizeCell = document.createElement('td'); sizeCell.textContent = item.isDirectory ? '資料夾' : formatSize(item.size);
+      const actionCell = document.createElement('td');
+      if (!item.isDirectory) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'button secondary'; button.textContent = '移入並上鎖';
+        button.addEventListener('click', () => openVaultImport({ shareId: state.vaultSourceShareId, path: [state.vaultSourcePath, item.name].filter(Boolean).join('/'), name: item.name, size: item.size }));
+        actionCell.append(button);
+      }
+      row.append(nameCell, sizeCell, actionCell); list.append(row);
+    }
+    empty.hidden = result.items.length !== 0;
+  } catch (error) {
+    empty.hidden = false; empty.textContent = error.message;
+  }
+}
+
+async function loadVaultObjects() {
+  const list = $('#vault-object-list'); list.replaceChildren();
+  try {
+    const result = await api('/api/vault/objects');
+    state.vaultItems = result.items;
+    for (const item of result.items) {
+      const row = document.createElement('tr');
+      const name = document.createElement('td'); name.textContent = item.name;
+      const size = document.createElement('td'); size.textContent = formatSize(item.size);
+      const actions = document.createElement('td'); const group = document.createElement('div'); group.className = 'vault-row-actions';
+      if (item.mediaType && item.mediaType !== 'application/octet-stream') {
+        const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'button secondary'; preview.textContent = '預覽／播放';
+        preview.addEventListener('click', () => showVaultPreview(item)); group.append(preview);
+      }
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '永久刪除';
+      remove.addEventListener('click', () => openVaultDelete(item)); group.append(remove);
+      actions.append(group); row.append(name, size, actions); list.append(row);
+    }
+    $('#vault-object-empty').hidden = result.items.length !== 0;
+  } catch (error) { setVaultMessage(error.message, true); }
+}
+
+function setVaultMessage(message, isError = false) {
+  const box = $('#vault-message'); box.textContent = message; box.hidden = !message; box.classList.toggle('error', isError);
+}
+
+function showVaultPreview(item) {
+  clearVaultPreview();
+  const panel = $('#vault-preview-panel'); const content = $('#vault-preview-content');
+  $('#vault-preview-title').textContent = item.name;
+  const url = `/api/vault/objects/${encodeURIComponent(item.id)}/content`;
+  let element;
+  if (item.mediaType.startsWith('image/')) {
+    element = document.createElement('img'); element.alt = item.name;
+  } else if (item.mediaType.startsWith('video/')) {
+    element = document.createElement('video'); element.controls = true; element.preload = 'metadata'; element.setAttribute('aria-label', item.name);
+  } else if (item.mediaType.startsWith('audio/')) {
+    element = document.createElement('audio'); element.controls = true; element.preload = 'metadata'; element.setAttribute('aria-label', item.name);
+  } else {
+    $('#vault-preview-message').textContent = '此檔案格式尚未支援預覽或播放。'; $('#vault-preview-message').hidden = false; panel.hidden = false; return;
+  }
+  element.src = url;
+  content.append(element);
+  state.vaultPreviewId = item.id;
+  panel.hidden = false;
+  void api('/api/activity', { method: 'POST', body: JSON.stringify({ view: 'vault', action: 'preview' }) }).catch(() => {});
+}
+
+function openVaultImport(item) {
+  state.vaultPendingImport = item;
+  $('#vault-import-description').textContent = `即將加密「${item.name}」（${formatSize(item.size)}），來源位置：${state.shares.find((share) => share.id === item.shareId)?.name || 'Nanako 資料空間'}／${item.path}。成功後會移除這個來源檔案。`;
+  $('#vault-import-message').hidden = true; $('#vault-import-message').textContent = '';
+  $('#confirm-vault-import').disabled = false; $('#confirm-vault-import').textContent = '移入並加密';
+  $('#vault-import-dialog').showModal();
+}
+
+function openVaultDelete(item) {
+  state.vaultPendingDelete = item;
+  $('#vault-delete-description').textContent = `確定要永久刪除「${item.name}」的加密內容？此操作不會移至資源回收桶。`;
+  $('#vault-delete-confirm').value = ''; $('#confirm-vault-delete').disabled = true;
+  $('#vault-delete-message').hidden = true; $('#vault-delete-message').textContent = '';
+  $('#vault-delete-dialog').showModal(); $('#vault-delete-confirm').focus();
+}
+
+async function loadVault() {
+  setVaultMessage('');
+  try {
+    if (state.vaultLockRequest) await state.vaultLockRequest;
+    const status = await api('/api/vault/status');
+    renderVaultStatus(status);
+    if (status.unlocked) await Promise.all([loadVaultObjects(), loadVaultSource()]);
+    clearInterval(state.vaultStatusTimer);
+    state.vaultStatusTimer = setInterval(() => {
+      void api('/api/vault/status').then(renderVaultStatus).catch(() => renderVaultStatus({ configured: true, unlocked: false }));
+    }, 30_000);
+  } catch (error) {
+    setVaultMessage(error.message, true);
+  }
+}
+
+async function lockVaultFromUi() {
+  clearVaultPreview();
+  try {
+    renderVaultStatus(await api('/api/vault/lock', { method: 'POST' }));
+    $('#vault-unlock-form').reset();
+    setVaultMessage('加密空間已鎖定。');
+  } catch (error) { setVaultMessage(error.message, true); }
+}
+
 async function loadUsers() {
   try {
     const { users } = await api('/api/users'); const body = $('#user-list'); body.replaceChildren();
@@ -1741,6 +1926,61 @@ $('#batch-move').addEventListener('click', () => batchFileOperation('move'));
 $('#batch-copy').addEventListener('click', () => batchFileOperation('copy'));
 $('#batch-delete').addEventListener('click', batchDeleteItems);
 $('#file-input').addEventListener('change', async (event) => { const files = [...event.target.files]; for (const file of files) { const query = new URLSearchParams({ shareId: state.shareId, path: state.path, name: file.name }); try { await api(`/api/upload?${query}`, { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' } }); } catch (error) { notify(`${file.name}：${error.message}`, true); } } event.target.value = ''; loadFiles(); });
+$('#vault-setup-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const password = String(values.get('password') || '');
+  if (password !== values.get('confirmPassword')) { setVaultMessage('兩次輸入的加密空間密碼不一致。', true); return; }
+  const button = form.querySelector('[type="submit"]'); button.disabled = true;
+  try {
+    await api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ password }) });
+    form.reset(); await loadVault(); setVaultMessage('已建立加密空間。請妥善保管加密空間密碼；目前沒有復原方式。');
+  } catch (error) { setVaultMessage(error.message, true); }
+  finally { button.disabled = false; }
+});
+$('#vault-unlock-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const button = form.querySelector('[type="submit"]'); button.disabled = true;
+  try {
+    await api('/api/vault/unlock', { method: 'POST', body: JSON.stringify({ password: values.get('password') }) });
+    form.reset(); await loadVault();
+  } catch (error) { setVaultMessage(error.message, true); }
+  finally { button.disabled = false; }
+});
+$('#vault-lock-button').addEventListener('click', lockVaultFromUi);
+$('#vault-source-share').addEventListener('change', (event) => { state.vaultSourceShareId = event.currentTarget.value; state.vaultSourcePath = ''; loadVaultSource(); });
+$('#vault-source-up').addEventListener('click', () => { state.vaultSourcePath = state.vaultSourcePath.split('/').slice(0, -1).join('/'); loadVaultSource(); });
+$('#vault-source-refresh').addEventListener('click', loadVaultSource);
+$('#vault-refresh').addEventListener('click', loadVaultObjects);
+$('#vault-preview-close').addEventListener('click', clearVaultPreview);
+$('#vault-import-dialog').addEventListener('cancel', (event) => { if ($('#confirm-vault-import').disabled) event.preventDefault(); });
+$('#cancel-vault-import').addEventListener('click', () => { if (!$('#confirm-vault-import').disabled) { state.vaultPendingImport = null; $('#vault-import-dialog').close(); } });
+$('#vault-import-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const item = state.vaultPendingImport; if (!item) return;
+  const button = $('#confirm-vault-import'); button.disabled = true; $('#cancel-vault-import').disabled = true; button.textContent = '加密驗證中…';
+  const status = $('#vault-import-message'); status.textContent = '檔案會以串流方式加密並驗證；完成前來源檔案不會移除。大型檔案可能需要一些時間。'; status.hidden = false; status.classList.remove('error');
+  try {
+    const result = await api('/api/vault/objects/import', { method: 'POST', body: JSON.stringify({ shareId: item.shareId, path: item.path }) });
+    state.vaultPendingImport = null; $('#vault-import-dialog').close();
+    setVaultMessage(`已加密並移除來源檔案「${result.item.name}」。`);
+    await Promise.all([loadVaultObjects(), loadVaultSource()]);
+    if (state.shareId === item.shareId) loadFiles();
+  } catch (error) { status.textContent = error.message; status.classList.add('error'); status.hidden = false; }
+  finally { button.disabled = false; $('#cancel-vault-import').disabled = false; button.textContent = '移入並加密'; }
+});
+$('#vault-delete-confirm').addEventListener('input', (event) => { $('#confirm-vault-delete').disabled = event.currentTarget.value !== '永久刪除'; });
+$('#cancel-vault-delete').addEventListener('click', () => { state.vaultPendingDelete = null; $('#vault-delete-dialog').close(); });
+$('#vault-delete-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const item = state.vaultPendingDelete; if (!item) return;
+  const button = $('#confirm-vault-delete'); button.disabled = true;
+  try {
+    await api(`/api/vault/objects/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '永久刪除' }) });
+    if (state.vaultPreviewId === item.id) clearVaultPreview();
+    state.vaultPendingDelete = null; $('#vault-delete-dialog').close(); await loadVaultObjects(); setVaultMessage('已永久刪除加密檔案。');
+  } catch (error) { const message = $('#vault-delete-message'); message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
+  finally { button.disabled = $('#vault-delete-confirm').value !== '永久刪除'; }
+});
 $('#user-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const permissions = state.shares.flatMap((share) => { const read = event.currentTarget.elements[`read-${share.id}`].checked; const write = event.currentTarget.elements[`write-${share.id}`].checked; return read ? [{ shareId: share.id, canRead: read, canWrite: write }] : []; }); const message = $('#user-message'); try { await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) }); event.currentTarget.reset(); message.textContent = '使用者已建立。'; message.classList.remove('error'); message.hidden = false; loadUsers(); } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; } });
 
 $('#photo-close').addEventListener('click', () => $('#photo-dialog').close());

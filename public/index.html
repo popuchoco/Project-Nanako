@@ -46,6 +46,7 @@
         <button class="desktop-icon" data-open-view="trash" type="button"><span class="desktop-icon-art trash-art" aria-hidden="true">▤</span><span>資源回收桶</span></button>
         <button class="desktop-icon" data-open-view="album" type="button"><span class="desktop-icon-art album-art" aria-hidden="true"><span></span><i></i></span><span>相簿</span></button>
         <button class="desktop-icon" data-open-view="player" type="button"><span class="desktop-icon-art player-art" aria-hidden="true">▶</span><span>播放器</span></button>
+        <button class="desktop-icon" data-open-view="vault" type="button"><span class="desktop-icon-art vault-art" aria-hidden="true">◉</span><span>加密空間</span></button>
         <button class="desktop-icon" data-open-view="duplicates" type="button"><span class="desktop-icon-art duplicate-art" aria-hidden="true">⧉</span><span>檔案去重</span></button>
       </div>
 
@@ -164,6 +165,45 @@
         <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">刪除時間</th><th scope="col">類型</th><th scope="col">操作</th></tr></thead><tbody id="trash-list"></tbody></table><div id="empty-trash" class="empty-state" hidden><strong>資源回收桶是空的</strong><span>刪除的項目會顯示在這裡。</span></div></div>
       </section>
 
+      <section id="view-vault" class="view-panel" hidden>
+        <div class="content-heading"><div><h2>加密空間</h2><p class="muted">每個 Nanako 帳號各自持有金鑰；管理員不能代替其他帳號解鎖。</p></div><button id="vault-lock-button" class="button secondary" type="button" hidden>立即鎖定</button></div>
+        <div class="notice vault-prototype-notice"><strong>加密空間仍為原型，尚未完成獨立安全審查與復原流程</strong><p>移入會先驗證密文，再移除 Nanako 資料空間中的原檔；原始磁碟區塊是否能被復原，取決於檔案系統與儲存裝置，本功能不保證安全抹除。請勿放入唯一副本或實際機密資料。</p></div>
+        <section id="vault-setup-panel" class="card vault-form-panel" hidden>
+          <div><h3>建立個人金鑰</h3><p class="muted">請設定與 Nanako 登入密碼分開的加密空間密碼。忘記密碼時目前沒有復原方式。</p></div>
+          <form id="vault-setup-form" class="form-stack">
+            <label>加密空間密碼<input id="vault-setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+            <label>再次輸入加密空間密碼<input id="vault-setup-confirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+            <button class="button primary" type="submit">建立加密空間</button>
+          </form>
+        </section>
+        <section id="vault-unlock-panel" class="card vault-form-panel" hidden>
+          <div><h3>加密空間已鎖定</h3><p class="muted">金鑰只會暫存在 Nanako 程序記憶體；手動鎖定、登出、閒置 15 分鐘或重新啟動後會鎖定。</p></div>
+          <form id="vault-unlock-form" class="form-stack">
+            <label>加密空間密碼<input id="vault-unlock-password" name="password" type="password" autocomplete="current-password" minlength="12" maxlength="256" required></label>
+            <button class="button primary" type="submit">解鎖加密空間</button>
+          </form>
+        </section>
+        <section id="vault-open-panel" class="card vault-open-panel" hidden>
+          <span class="vault-open-mark" aria-hidden="true">✓</span><div><h3>加密空間已解鎖</h3><p class="muted">目前解鎖的是這個本機帳號的加密空間。關閉視窗、手動鎖定或登出會清除金鑰參照。</p></div>
+        </section>
+        <section id="vault-content-panel" class="vault-content-panel" hidden>
+          <section class="card vault-browser-card">
+            <div class="content-heading"><div><h3>從 Nanako 資料空間移入</h3><p class="muted">只能選擇 NanakoData 內已管理的檔案；移入完成後會移除原始檔案路徑。</p></div></div>
+            <div class="file-controls vault-source-controls"><label class="field-inline">來源資料空間<select id="vault-source-share" aria-label="加密空間來源資料空間"></select></label><button id="vault-source-up" class="button secondary" type="button">上層資料夾</button><button id="vault-source-refresh" class="button secondary" type="button">重新整理</button><span id="vault-source-path" class="vault-source-path">主資料夾</span></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-source-list"></tbody></table><p id="vault-source-empty" class="empty-state" hidden>這個資料夾沒有可移入的項目，或目前帳號沒有可寫入的 Nanako 資料空間。</p></div>
+          </section>
+          <section class="card vault-browser-card">
+            <div class="content-heading"><div><h3>已上鎖檔案</h3><p class="muted">名稱及索引內容以加密方式儲存；支援格式可在 Nanako 視窗內預覽或播放。</p></div><button id="vault-refresh" class="button secondary" type="button">重新整理</button></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-object-list"></tbody></table><p id="vault-object-empty" class="empty-state" hidden>加密空間目前沒有檔案。</p></div>
+            <section id="vault-preview-panel" class="vault-preview-panel" hidden><div class="content-heading"><h3 id="vault-preview-title">檔案預覽</h3><button id="vault-preview-close" class="button secondary" type="button">關閉預覽</button></div><div id="vault-preview-content" class="vault-preview-content"></div><p id="vault-preview-message" class="inline-message" role="status" hidden></p></section>
+          </section>
+        </section>
+        <p id="vault-message" class="inline-message" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <dialog id="vault-import-dialog" class="confirmation-dialog"><form id="vault-import-form" class="form-stack"><h2>移入並加密檔案</h2><p id="vault-import-description" class="muted"></p><p class="notice">驗證完成後，Nanako 會移除一般資料夾中的原始檔案。請先確認已備份重要資料；磁碟不保證能安全抹除舊資料區塊。</p><p id="vault-import-message" class="inline-message" role="status" hidden></p><div class="dialog-actions"><button id="cancel-vault-import" class="button secondary" type="button">取消</button><button id="confirm-vault-import" class="button primary" type="submit">移入並加密</button></div></form></dialog>
+      <dialog id="vault-delete-dialog" class="confirmation-dialog"><form id="vault-delete-form" class="form-stack"><h2>永久刪除加密檔案</h2><p id="vault-delete-description" class="muted"></p><label>輸入「永久刪除」確認<input id="vault-delete-confirm" autocomplete="off" required></label><p id="vault-delete-message" class="inline-message" role="status" hidden></p><div class="dialog-actions"><button id="cancel-vault-delete" class="button secondary" type="button">取消</button><button id="confirm-vault-delete" class="button danger" type="submit" disabled>永久刪除</button></div></form></dialog>
+
       <section id="view-users" class="view-panel" hidden>
         <div class="content-heading"><div><h2>使用者與權限</h2><p class="muted">每個使用者都使用本機帳號；權限預設採拒絕。</p></div></div>
         <div class="management-grid"><form id="user-form" class="card form-stack"><h3>新增使用者</h3><label>帳號<input name="username" autocomplete="off" minlength="3" maxlength="32" required></label><label>初始密碼<input name="password" type="password" minlength="12" maxlength="256" required></label><fieldset><legend>資料空間權限</legend><div id="permission-options" class="permission-options"></div></fieldset><button class="button primary" type="submit">建立使用者</button><p id="user-message" class="inline-message" role="status" hidden></p></form><section class="card"><h3>本機使用者</h3><p class="muted">可調整一般使用者的資料空間權限，或停用帳號並立即撤銷其登入工作階段。</p><div id="user-list" class="user-list"></div></section></div>
@@ -229,6 +269,7 @@
           <button data-open-view="files" type="button"><span class="launcher-icon folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
           <button data-open-view="album" type="button"><span class="launcher-icon album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>
           <button data-open-view="player" type="button"><span class="launcher-icon player-art" aria-hidden="true">▶</span>播放器</button>
+          <button data-open-view="vault" type="button"><span class="launcher-icon vault-art" aria-hidden="true">◉</span>加密空間</button>
           <button data-open-view="duplicates" type="button"><span class="launcher-icon duplicate-art" aria-hidden="true">⧉</span>檔案去重</button>
           <button data-open-view="trash" type="button"><span class="launcher-icon trash-art" aria-hidden="true">▤</span>資源回收桶</button>
           <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>儲存空間</button>

@@ -258,3 +258,18 @@
 @media(max-width:900px){.desktop-status-widget{right:16px;width:250px;padding:13px 14px 11px}.desktop-widget-time{font-size:29px}}
 @media(max-width:620px){.desktop-status-widget{display:none}.launcher-quick-list{gap:4px}.launcher-quick-list>button{gap:5px;padding:4px 5px;font-size:9px}}
 @media(prefers-reduced-motion:reduce){.desktop-status-widget,.launcher-menu:not([hidden]){animation:none}.launcher-quick-list>button{transition:none}}
+.vault-content-panel{display:grid;gap:14px;margin-top:14px}
+.vault-browser-card{min-width:0;padding:16px}
+.vault-source-controls{align-items:center;flex-wrap:wrap;margin:10px 0 12px}
+.vault-source-path{min-width:100px;flex:1;color:#5d7182;font-size:12px;overflow-wrap:anywhere}
+.vault-file-name{display:inline-flex;align-items:center;gap:7px;max-width:100%;border:0;padding:4px 0;background:transparent;color:#214d6b;text-align:left;overflow-wrap:anywhere}
+.vault-file-name[aria-disabled="true"]{cursor:default;color:inherit}
+.vault-row-actions{display:flex;flex-wrap:wrap;gap:6px}
+.vault-row-actions .button{min-height:30px;padding:5px 9px;font-size:11px}
+.vault-preview-panel{margin-top:18px;border-top:1px solid #e1e9ef;padding-top:12px}
+.vault-preview-content{display:grid;place-items:center;min-height:80px;max-height:60vh;overflow:auto;border-radius:10px;background:#f4f8fb;padding:12px}
+.vault-preview-content img{display:block;max-width:100%;max-height:55vh;object-fit:contain}
+.vault-preview-content video,.vault-preview-content audio{width:min(100%,820px)}
+.vault-empty-note{padding:18px 12px;color:#718394;font-size:12px;text-align:center}
+.vault-prototype-notice{margin:10px 0;border-left:3px solid #d9a13c}
+@media(max-width:620px){.vault-browser-card{padding:12px}.vault-source-controls>*{max-width:100%}.vault-row-actions{min-width:96px}}
