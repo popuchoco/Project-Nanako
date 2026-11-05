@@ -1277,37 +1277,49 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
     }
   } finally { await file.close(); }
 
-  global.gc?.();
-  await new Promise((resolve) => setImmediate(resolve));
-  const baselineUsage = process.memoryUsage();
-  let peakRss = baselineUsage.rss;
-  let peakArrayBuffers = baselineUsage.arrayBuffers;
-  const sample = setInterval(() => {
-    const usage = process.memoryUsage();
-    peakRss = Math.max(peakRss, usage.rss);
-    peakArrayBuffers = Math.max(peakArrayBuffers, usage.arrayBuffers);
-  }, 10);
-  sample.unref();
-  try {
+  const measurePeakMemory = async (operation) => {
+    global.gc?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    const baselineUsage = process.memoryUsage();
+    let peakRss = baselineUsage.rss;
+    let peakArrayBuffers = baselineUsage.arrayBuffers;
+    const sample = setInterval(() => {
+      const usage = process.memoryUsage();
+      peakRss = Math.max(peakRss, usage.rss);
+      peakArrayBuffers = Math.max(peakArrayBuffers, usage.arrayBuffers);
+    }, 10);
+    sample.unref();
+    try { await operation(); }
+    finally {
+      clearInterval(sample);
+      const finalUsage = process.memoryUsage();
+      peakRss = Math.max(peakRss, finalUsage.rss);
+      peakArrayBuffers = Math.max(peakArrayBuffers, finalUsage.arrayBuffers);
+    }
+    return {
+      rssDelta: peakRss - baselineUsage.rss,
+      arrayBufferDelta: peakArrayBuffers - baselineUsage.arrayBuffers,
+    };
+  };
+
+  const createMemory = await measurePeakMemory(async () => {
     const created = await request('/api/archive/create', {
       method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.bin' }),
     });
     assert.equal(created.response.status, 201, created.body.message);
     assert.ok(created.body.size > 30 * 1024 * 1024);
+  });
+  const extractMemory = await measurePeakMemory(async () => {
     const extracted = await request('/api/archive/extract', {
       method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'large-random.zip' }),
     });
     assert.equal(extracted.response.status, 201, extracted.body.message);
     assert.equal((await stat(path.join(dataDir, 'files', shareId, 'large-random', 'large-random.bin'))).size, 32 * blockBytes);
-  } finally {
-    clearInterval(sample);
-    peakRss = Math.max(peakRss, process.memoryUsage().rss);
-    peakArrayBuffers = Math.max(peakArrayBuffers, process.memoryUsage().arrayBuffers);
+  });
+  for (const [phase, memory] of [['建立', createMemory], ['解壓', extractMemory]]) {
+    assert.ok(memory.rssDelta < 96 * 1024 * 1024 && memory.arrayBufferDelta < 32 * 1024 * 1024,
+      `32 MiB ZIP ${phase}串流應保持有界；RSS 增量實測 ${(memory.rssDelta / 1024 / 1024).toFixed(1)} MiB（限 96 MiB），ArrayBuffer 增量實測 ${(memory.arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 32 MiB）`);
   }
-  const rssDelta = peakRss - baselineUsage.rss;
-  const arrayBufferDelta = peakArrayBuffers - baselineUsage.arrayBuffers;
-  assert.ok(rssDelta < 96 * 1024 * 1024 && arrayBufferDelta < 32 * 1024 * 1024,
-    `32 MiB ZIP 串流應保持有界；RSS 增量實測 ${(rssDelta / 1024 / 1024).toFixed(1)} MiB（限 96 MiB），ArrayBuffer 增量實測 ${(arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 32 MiB）`);
 });
 
 test('directory ZIP archives preserve nested files and empty directories', async (t) => {
