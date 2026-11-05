@@ -14,7 +14,8 @@
 ## 階段一：SMB 伺服器概念驗證
 
 - [x] Nanako 管理員介面唯讀顯示 Windows SMB Server 服務、TCP 445 使用狀態、分享管理命令可用性及目前程序提升狀態。這只供實作前置診斷，不會建立 Windows 分享或改變主機設定。
-- 評估 Windows 內建 SMB 與可封裝的 SMB2／SMB3 Server 兩條路線，不以 SMB 用戶端套件充當 Server。
+- [x] 建立共用的逐帳號／逐分享讀寫授權政策，未知 SMB 操作預設拒絕，外部路徑分享一律拒絕；現有檔案 API 已改用同一套操作判斷。
+- [x] 初步驗證數個可封裝 SMB2／SMB3 Server 候選；目前候選皆未同時通過 Windows 測試與 Nanako 逐帳號授權門檻，結果見 [`smb-prototype-results.md`](smb-prototype-results.md)。不以 SMB 用戶端套件充當 Server。
 - 用小型 NanakoData 測試目錄驗證協定交涉、檔案列舉、讀取／寫入、建立目錄、重新命名、刪除、並行連線、檔案鎖定與斷線復原。
 - 驗證使用者權限映射：同一 SMB 連線不得因知道其他分享名稱或路徑而跨越 Nanako 帳號授權。
 - 驗證伺服器端排除資源回收桶、操作紀錄、資料庫、密碼雜湊與任何暫存項目。不可只依賴隱藏屬性或 Renderer 過濾。

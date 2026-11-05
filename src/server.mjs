@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { createArchive, extractArchive } from './archives.mjs';
 import { readWindowsSmbStatus } from './windows-smb-status.mjs';
+import { isShareOperationAllowed } from './share-access.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 const execFileAsync = promisify(execFile);
@@ -496,7 +497,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
 
   function requirePermission(user, shareId, write = false) {
     const perm = permission(user, shareId);
-    if (!perm.can_read || (write && !perm.can_write)) throw fail(403, 'permission_denied', '你沒有這項操作的權限。');
+    if (!isShareOperationAllowed(user, perm, write ? 'write' : 'read')) throw fail(403, 'permission_denied', '你沒有這項操作的權限。');
   }
 
   async function currentUser(req) {

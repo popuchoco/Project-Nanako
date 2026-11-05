@@ -1,6 +1,6 @@
 # ADR-0015：Windows SMB 區域網路分享
 
-- 狀態：已接受需求與安全邊界；伺服器實作技術仍待原型驗證
+- 狀態：已接受需求與安全邊界；實作技術尚未通過原型驗證
 - 日期：2026-11-05
 
 ## 背景
@@ -35,6 +35,8 @@ Nanako 是以 Windows 電腦提供類 NAS 體驗的 Electron 延伸作品。使�
 ## 目前已實作的前置項目
 
 管理員可在 Nanako「網路狀態」檢視 Windows SMB Server 服務狀態、TCP 445 是否有人監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。該檢查使用唯讀 PowerShell 查詢；不建立／移除 Windows 分享、不啟停 `LanmanServer`、不設定防火牆，也不代表 Nanako SMB 分享已可用。伺服器引擎、分享管理與逐帳號認證仍尚未實作。
+
+Nanako 已將讀取／寫入授權判斷集中到共用政策函式，並由現有檔案 API 與測試使用；SMB 引擎候選的 Windows 相容性與權限缺口記錄於 [`docs/smb-prototype-results.md`](../smb-prototype-results.md)。該政策不代表 SMB 協定服務已啟動。
 
 ## 驗收條件
 
