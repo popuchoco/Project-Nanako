@@ -10,7 +10,7 @@
 
 ## 目前範圍
 
-- Electron 桌面視窗搭配內嵌本機 HTTP 服務；Electron 視窗啟動時使用隨機連接埠。Windows x64 可攜式 `.exe` 已完成建置；封裝後的媒體測試模式可執行並產生報告。正式使用介面流程、關閉重開後資料保留與實際來源影音檔仍待驗證。
+- Electron 桌面視窗搭配內嵌本機 HTTP 服務；Electron 視窗啟動時使用隨機連接埠。Windows x64 可攜式 `.exe` 已完成建置；封裝後的媒體測試模式可執行並產生報告。管理員首次設定、登入、建立使用者／資料夾及關閉重開後資料保留，已加入 Electron 桌面煙霧測試；完整正式使用流程與實際來源影音檔仍待驗證。
 - Nanako 視窗內提供仿桌面的操作介面：桌面捷徑、應用程式選單、工作列、時鐘，以及可拖曳、最小化、最大化與關閉的 Nanako 內部應用程式視窗；不呼叫 Windows Shell 或修改作業系統桌面。
 - 命令列模式預設使用 `127.0.0.1:8765`；目前**不開放區域網路連線**。
 - 首次啟動建立本機管理員；帳號、權限與登入工作階段存放在本機 SQLite。
@@ -42,6 +42,7 @@
 
 ```powershell
 npm test
+npm run test:desktop-smoke # Windows Electron 首次設定、使用者管理與重開資料保留測試
 npm run test:media # Electron 執行期格式宣告與可產生測試片段的實際播放檢查
 npm run package:win # Windows x64 可攜式封裝，輸出至 dist/
 npm start       # 本機網頁原型：127.0.0.1:8765

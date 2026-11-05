@@ -13,6 +13,7 @@
     "start": "node src/run.mjs",
     "desktop": "electron electron/main.mjs",
     "test:media": "electron electron/main.mjs --media-compatibility-test",
+    "test:desktop-smoke": "node --test test/desktop-smoke.test.mjs",
     "package:win": "electron-builder --win portable --x64",
     "test": "node --test"
   },

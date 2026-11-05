@@ -504,7 +504,6 @@ function initializeDesktopInteractions() {
   $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
   $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
   $('#desktop-account').addEventListener('click', () => toggleLauncherMenu());
-  $('#logout-menu-button').addEventListener('click', () => $('#logout-button').click());
   $('#desktop-area').addEventListener('pointerdown', (event) => {
     if (event.target === event.currentTarget) closeLauncherMenu();
   });
@@ -2072,8 +2071,8 @@ async function loadSystem() {
 }
 
 $('#auth-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); const form = new FormData(event.currentTarget); const mode = event.currentTarget.dataset.mode; const errorBox = $('#auth-error'); errorBox.hidden = true;
-  try { const result = await api(mode === 'setup' ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) }); state.user = result.user; event.currentTarget.reset(); showApp(); }
+  event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const mode = formElement.dataset.mode; const errorBox = $('#auth-error'); errorBox.hidden = true;
+  try { const result = await api(mode === 'setup' ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) }); state.user = result.user; formElement.reset(); showApp(); }
   catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
 });
 
@@ -2265,7 +2264,23 @@ $('#vault-delete-form').addEventListener('submit', async (event) => {
   } catch (error) { const message = $('#vault-delete-message'); message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
   finally { button.disabled = $('#vault-delete-confirm').value !== '移至資源回收筒'; }
 });
-$('#user-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const permissions = state.shares.flatMap((share) => { const read = event.currentTarget.elements[`read-${share.id}`].checked; const write = event.currentTarget.elements[`write-${share.id}`].checked; return read ? [{ shareId: share.id, canRead: read, canWrite: write }] : []; }); const message = $('#user-message'); try { await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) }); event.currentTarget.reset(); message.textContent = '使用者已建立。'; message.classList.remove('error'); message.hidden = false; loadUsers(); } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; } });
+$('#user-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
+  const permissions = state.shares.flatMap((share) => {
+    const read = formElement.elements[`read-${share.id}`].checked;
+    const write = formElement.elements[`write-${share.id}`].checked;
+    return read ? [{ shareId: share.id, canRead: read, canWrite: write }] : [];
+  });
+  const message = $('#user-message');
+  try {
+    await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) });
+    formElement.reset();
+    message.textContent = '使用者已建立。';
+    message.classList.remove('error'); message.hidden = false; loadUsers();
+  } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
+});
 
 $('#photo-close').addEventListener('click', () => $('#photo-dialog').close());
 $('#photo-prev').addEventListener('click', () => showPhoto(state.photoIndex - 1));

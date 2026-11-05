@@ -47,6 +47,7 @@ async function createWindow() {
   windowRef = new BrowserWindow({
     width: 1280,
     height: 820,
+    show: process.env.NANAKO_DESKTOP_SMOKE_TEST !== '1',
     minWidth: 760,
     minHeight: 600,
     title: 'Nanako｜本機檔案空間',
