@@ -1106,6 +1106,9 @@ function clearVaultContents() {
   state.vaultPendingDelete = null;
   $('#vault-object-list').replaceChildren();
   $('#vault-source-list').replaceChildren();
+  $('#vault-recovery-list').replaceChildren();
+  $('#vault-recovery-panel').hidden = true;
+  $('#vault-recovery-truncated').hidden = true;
   $('#vault-object-empty').hidden = true;
   $('#vault-source-path').textContent = '主資料夾';
   $('#vault-import-description').textContent = '';
@@ -1172,6 +1175,59 @@ async function loadVaultObjects() {
   } catch (error) { setVaultMessage(error.message, true); }
 }
 
+async function loadVaultRecovery() {
+  const panel = $('#vault-recovery-panel');
+  const list = $('#vault-recovery-list');
+  list.replaceChildren();
+  try {
+    const result = await api('/api/vault/recovery');
+    $('#vault-recovery-truncated').hidden = !result.truncated;
+    for (const item of result.items) {
+      const card = document.createElement('article'); card.className = 'vault-recovery-item';
+      const details = document.createElement('div');
+      const title = document.createElement('strong'); title.textContent = item.name;
+      const location = document.createElement('p'); location.textContent = `${state.shares.find((share) => share.id === item.shareId)?.name || 'Nanako 資料空間'}／${item.relativePath} · ${formatSize(item.size)}`;
+      const status = document.createElement('p'); status.className = `vault-recovery-state is-${item.sourceState}`;
+      const statusText = {
+        unchanged: '來源檔案仍在，內容與已加密版本相符。',
+        missing: '原始路徑已不存在；加密版本仍保留。',
+        changed: '來源檔案已變更或類型不同；為避免刪錯，不會移除。',
+        'ciphertext-missing': '加密密文不存在或無法安全讀取；不能完成上鎖。若原檔仍在，請保留原檔並清除失效索引。',
+        unavailable: '目前無法檢查來源（可能已無資料空間權限）；不會自動移除。',
+      };
+      status.textContent = statusText[item.sourceState] || statusText.unavailable;
+      details.append(title, location, status);
+      const actions = document.createElement('div'); actions.className = 'vault-row-actions';
+      if (['unchanged', 'missing'].includes(item.sourceState)) {
+        const complete = document.createElement('button'); complete.type = 'button'; complete.className = 'button primary'; complete.textContent = '完成上鎖';
+        complete.addEventListener('click', () => resolveVaultRecovery(item, 'complete'));
+        actions.append(complete);
+      }
+      const keep = document.createElement('button'); keep.type = 'button'; keep.className = 'button secondary'; keep.textContent = item.sourceState === 'ciphertext-missing' ? '清除失效索引' : '保留原檔';
+      keep.addEventListener('click', () => resolveVaultRecovery(item, 'keep'));
+      actions.append(keep); card.append(details, actions); list.append(card);
+    }
+    panel.hidden = result.items.length === 0 && !result.truncated;
+  } catch (error) { panel.hidden = true; setVaultMessage(error.message, true); }
+}
+
+async function resolveVaultRecovery(item, action) {
+  const complete = action === 'complete';
+  const prompt = complete
+    ? `確認處理「${item.name}」的中斷移入？只有來源仍存在且內容相符時，Nanako 才會移除 Nanako 資料空間中的原檔。`
+    : item.sourceState === 'ciphertext-missing'
+      ? `確認清除「${item.name}」失效的加密索引？Nanako 不會刪除 Nanako 資料空間中的來源檔案。`
+      : `保留「${item.name}」的原始檔案，並結束這筆待確認作業？加密版本也會保留。`;
+  if (!confirm(prompt)) return;
+  try {
+    await api(`/api/vault/recovery/${encodeURIComponent(item.id)}`, { method: 'POST', body: JSON.stringify({ action }) });
+    await Promise.all([loadVaultRecovery(), loadVaultObjects(), loadVaultSource()]);
+    setVaultMessage(complete ? '復原作業已完成；若來源內容不同，Nanako 會保留原檔。'
+      : item.sourceState === 'ciphertext-missing' ? '已清除失效的加密索引；未刪除來源檔案。'
+        : '已保留原檔；加密版本也未變更。');
+  } catch (error) { setVaultMessage(error.message, true); await loadVaultRecovery(); }
+}
+
 function setVaultMessage(message, isError = false) {
   const box = $('#vault-message'); box.textContent = message; box.hidden = !message; box.classList.toggle('error', isError);
 }
@@ -1220,7 +1276,7 @@ async function loadVault() {
     if (state.vaultLockRequest) await state.vaultLockRequest;
     const status = await api('/api/vault/status');
     renderVaultStatus(status);
-    if (status.unlocked) await Promise.all([loadVaultObjects(), loadVaultSource()]);
+    if (status.unlocked) await Promise.all([loadVaultObjects(), loadVaultSource(), loadVaultRecovery()]);
     clearInterval(state.vaultStatusTimer);
     state.vaultStatusTimer = setInterval(() => {
       void api('/api/vault/status').then(renderVaultStatus).catch(() => renderVaultStatus({ configured: true, unlocked: false }));
@@ -1951,6 +2007,7 @@ $('#vault-source-share').addEventListener('change', (event) => { state.vaultSour
 $('#vault-source-up').addEventListener('click', () => { state.vaultSourcePath = state.vaultSourcePath.split('/').slice(0, -1).join('/'); loadVaultSource(); });
 $('#vault-source-refresh').addEventListener('click', loadVaultSource);
 $('#vault-refresh').addEventListener('click', loadVaultObjects);
+$('#vault-recovery-refresh').addEventListener('click', loadVaultRecovery);
 $('#vault-preview-close').addEventListener('click', clearVaultPreview);
 $('#vault-import-dialog').addEventListener('cancel', (event) => { if ($('#confirm-vault-import').disabled) event.preventDefault(); });
 $('#cancel-vault-import').addEventListener('click', () => { if (!$('#confirm-vault-import').disabled) { state.vaultPendingImport = null; $('#vault-import-dialog').close(); } });
@@ -1962,8 +2019,10 @@ $('#vault-import-form').addEventListener('submit', async (event) => {
   try {
     const result = await api('/api/vault/objects/import', { method: 'POST', body: JSON.stringify({ shareId: item.shareId, path: item.path }) });
     state.vaultPendingImport = null; $('#vault-import-dialog').close();
-    setVaultMessage(`已加密並移除來源檔案「${result.item.name}」。`);
-    await Promise.all([loadVaultObjects(), loadVaultSource()]);
+    setVaultMessage(result.item.sourceRemovalPending
+      ? `「${result.item.name}」已加密；原始檔尚未移除，請在「未完成的移入作業」中檢查並處理。`
+      : `已加密並移除來源檔案「${result.item.name}」。`);
+    await Promise.all([loadVaultObjects(), loadVaultSource(), loadVaultRecovery()]);
     if (state.shareId === item.shareId) loadFiles();
   } catch (error) { status.textContent = error.message; status.classList.add('error'); status.hidden = false; }
   finally { button.disabled = false; $('#cancel-vault-import').disabled = false; button.textContent = '移入並加密'; }

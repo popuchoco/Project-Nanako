@@ -92,6 +92,7 @@ test('vault imports only Nanako files, stores opaque ciphertext and serves authe
   assert.equal(name, 'vault-check.png');
   assert.equal(size, sourceBytes.length);
   assert.equal(imported.body.item.mediaType, 'image/png');
+  assert.equal(imported.body.item.sourceRemovalPending, false);
 
   const sourcePath = path.join(dataDir, 'files', shareId, 'vault-check.png');
   await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
@@ -192,6 +193,166 @@ test('vault is locked again after server shutdown and restart', async (t) => {
     const restartedCookie = login.headers.get('set-cookie').split(';')[0];
     const status = await fetch(`${restartedBase}/api/vault/status`, { headers: { Cookie: restartedCookie } });
     assert.deepEqual(await status.json(), { configured: true, unlocked: false });
+  } finally { await restarted.close(); }
+});
+
+test('vault import recovery removes only unchanged plaintext and can preserve changed sources', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const upload = async (name, bytes) => request(`/api/upload?${new URLSearchParams({ shareId, path: '', name })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: bytes,
+  });
+  const original = Buffer.from('recovery source contents');
+  assert.equal((await upload('recovery.txt', original)).response.status, 201);
+  assert.equal((await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-recovery-password-2026' }),
+  })).response.status, 201);
+  const imported = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'recovery.txt' }),
+  });
+  assert.equal(imported.response.status, 201, imported.body.message);
+  const objectId = imported.body.item.id;
+  const sourcePath = path.join(dataDir, 'files', shareId, 'recovery.txt');
+  await writeFile(sourcePath, original);
+  const recoveryDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try { recoveryDb.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)').run(objectId, user.id, new Date().toISOString()); }
+  finally { recoveryDb.close(); }
+
+  const pending = await request('/api/vault/recovery', { headers: { Cookie: cookie } });
+  assert.equal(pending.response.status, 200);
+  assert.deepEqual(pending.body.items.map(({ id, sourceState }) => ({ id, sourceState })), [{ id: objectId, sourceState: 'unchanged' }]);
+  const encryptedPath = path.join(dataDir, '.nanako-vault', user.id, `${objectId}.nkv`);
+  const validCiphertext = await readFile(encryptedPath);
+  const corruptedCiphertext = Buffer.from(validCiphertext);
+  corruptedCiphertext[corruptedCiphertext.length - 1] ^= 0x01;
+  await writeFile(encryptedPath, corruptedCiphertext);
+  const refusedCorrupt = await request(`/api/vault/recovery/${objectId}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(refusedCorrupt.response.status, 409);
+  assert.deepEqual(await readFile(sourcePath), original);
+  await writeFile(encryptedPath, validCiphertext);
+  const completed = await request(`/api/vault/recovery/${objectId}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(completed.response.status, 200);
+  await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
+  assert.equal((await request('/api/vault/recovery', { headers: { Cookie: cookie } })).body.items.length, 0);
+
+  const changedOriginal = Buffer.from('second source content');
+  assert.equal((await upload('changed.txt', changedOriginal)).response.status, 201);
+  const changedImport = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'changed.txt' }),
+  });
+  assert.equal(changedImport.response.status, 201, changedImport.body.message);
+  const changedPath = path.join(dataDir, 'files', shareId, 'changed.txt');
+  const modified = Buffer.from('replacement source data');
+  await writeFile(changedPath, modified);
+  const changedDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try { changedDb.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)').run(changedImport.body.item.id, user.id, new Date().toISOString()); }
+  finally { changedDb.close(); }
+  const changedPending = await request('/api/vault/recovery', { headers: { Cookie: cookie } });
+  assert.equal(changedPending.body.items[0].sourceState, 'changed');
+  const refused = await request(`/api/vault/recovery/${changedImport.body.item.id}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(refused.response.status, 409);
+  assert.deepEqual(await readFile(changedPath), modified);
+  const kept = await request(`/api/vault/recovery/${changedImport.body.item.id}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'keep' }),
+  });
+  assert.equal(kept.response.status, 200);
+  assert.deepEqual(await readFile(changedPath), modified);
+
+  const lastSource = Buffer.from('keep original if encrypted data is absent');
+  assert.equal((await upload('missing-ciphertext.txt', lastSource)).response.status, 201);
+  const lastImport = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'missing-ciphertext.txt' }),
+  });
+  assert.equal(lastImport.response.status, 201, lastImport.body.message);
+  const lastPath = path.join(dataDir, 'files', shareId, 'missing-ciphertext.txt');
+  await writeFile(lastPath, lastSource);
+  const lastDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try { lastDb.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)').run(lastImport.body.item.id, user.id, new Date().toISOString()); }
+  finally { lastDb.close(); }
+  await rm(path.join(dataDir, '.nanako-vault', user.id, `${lastImport.body.item.id}.nkv`));
+  const missingCiphertext = await request('/api/vault/recovery', { headers: { Cookie: cookie } });
+  assert.equal(missingCiphertext.body.items.find((item) => item.id === lastImport.body.item.id).sourceState, 'ciphertext-missing');
+  const unsafeComplete = await request(`/api/vault/recovery/${lastImport.body.item.id}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(unsafeComplete.response.status, 409);
+  assert.deepEqual(await readFile(lastPath), lastSource);
+  const clearBrokenIndex = await request(`/api/vault/recovery/${lastImport.body.item.id}`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ action: 'keep' }),
+  });
+  assert.equal(clearBrokenIndex.response.status, 200);
+  const verifyDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
+  try { assert.equal(verifyDb.prepare('SELECT id FROM vault_objects WHERE id = ?').get(lastImport.body.item.id), undefined); }
+  finally { verifyDb.close(); }
+  assert.deepEqual(await readFile(lastPath), lastSource);
+  const history = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  const recoveryAudits = history.body.logs.filter((entry) => entry.action === '檢視加密空間復原狀態' || entry.action === '處理加密空間復原');
+  assert.ok(recoveryAudits.length >= 5);
+  assert.ok(recoveryAudits.every((entry) => entry.target === '待確認移入作業'));
+  assert.ok(!recoveryAudits.some((entry) => /recovery\.txt|changed\.txt|missing-ciphertext/u.test(entry.target)));
+});
+
+test('pending vault import survives restart and recovery requires a fresh unlock', async (t) => {
+  const { dataDir, server, setup, request } = await setupServer(t);
+  const { cookie, shareId, user } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const bytes = Buffer.from('restart recovery source');
+  const uploaded = await request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'restart.txt' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: bytes,
+  });
+  assert.equal(uploaded.response.status, 201);
+  assert.equal((await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-restart-recovery-2026' }),
+  })).response.status, 201);
+  const imported = await request('/api/vault/objects/import', {
+    method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: 'restart.txt' }),
+  });
+  assert.equal(imported.response.status, 201);
+  const sourcePath = path.join(dataDir, 'files', shareId, 'restart.txt');
+  await writeFile(sourcePath, bytes);
+  const journalDb = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'));
+  try { journalDb.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)').run(imported.body.item.id, user.id, new Date().toISOString()); }
+  finally { journalDb.close(); }
+
+  await server.close();
+  const restarted = await startServer({ dataDir, host: '127.0.0.1', port: 0 });
+  try {
+  const base = `http://127.0.0.1:${restarted.port}`;
+  const login = await fetch(`${base}/api/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(login.status, 200);
+  await login.text();
+  const restartedCookie = login.headers.get('set-cookie').split(';')[0];
+  const relocked = await fetch(`${base}/api/vault/status`, { headers: { Cookie: restartedCookie } });
+  assert.deepEqual(await relocked.json(), { configured: true, unlocked: false });
+  const lockedRecovery = await fetch(`${base}/api/vault/recovery`, { headers: { Cookie: restartedCookie } });
+  assert.equal(lockedRecovery.status, 423);
+  await lockedRecovery.text();
+  const unlock = await fetch(`${base}/api/vault/unlock`, {
+    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'vault-restart-recovery-2026' }),
+  });
+  assert.equal(unlock.status, 200);
+  await unlock.text();
+  const recovery = await fetch(`${base}/api/vault/recovery`, { headers: { Cookie: restartedCookie } });
+  const recoveryBody = await recovery.json();
+  assert.equal(recoveryBody.items[0].sourceState, 'unchanged');
+  const complete = await fetch(`${base}/api/vault/recovery/${imported.body.item.id}`, {
+    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'complete' }),
+  });
+  assert.equal(complete.status, 200);
+  await complete.text();
+  await assert.rejects(readFile(sourcePath), { code: 'ENOENT' });
   } finally { await restarted.close(); }
 });
 

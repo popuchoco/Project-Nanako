@@ -329,6 +329,11 @@ function initDatabase(dataDir) {
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES vaults(user_id) ON DELETE CASCADE,
       metadata_json TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS vault_pending_imports (
+      object_id TEXT PRIMARY KEY REFERENCES vault_objects(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES vaults(user_id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS trash_items (
       id TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
       original_path TEXT NOT NULL, stored_path TEXT NOT NULL, item_name TEXT NOT NULL,
@@ -623,7 +628,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'POST' && route === '/api/vault/unlock') return { action: '解鎖加密空間', target: '加密空間原型' };
     if (method === 'POST' && route === '/api/vault/lock') return { action: '鎖定加密空間', target: '加密空間原型' };
     if (method === 'GET' && route === '/api/vault/objects') return { action: '檢視加密空間檔案', target: '加密空間' };
+    if (method === 'GET' && route === '/api/vault/recovery') return { action: '檢視加密空間復原狀態', target: '待確認移入作業' };
     if (method === 'POST' && route === '/api/vault/objects/import') return { action: '移入並加密檔案', target: '加密空間' };
+    if (method === 'POST' && /^\/api\/vault\/recovery\/[0-9a-f-]{36}$/iu.test(route)) return { action: '處理加密空間復原', target: '待確認移入作業' };
     if (method === 'GET' && /^\/api\/vault\/objects\/[0-9a-f-]{36}\/content$/iu.test(route)) return { action: '預覽加密檔案', target: '加密空間' };
     if (method === 'DELETE' && /^\/api\/vault\/objects\/[0-9a-f-]{36}$/iu.test(route)) return { action: '永久刪除加密檔案', target: '加密空間' };
     if (method === 'POST' && route === '/api/duplicates/scan') return { action: '開始重複檔案掃描', target: 'Nanako 資料空間' };
@@ -910,6 +917,123 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             return json(res, 200, { items });
           });
         }
+        if (route === '/api/vault/recovery' && method === 'GET') {
+          return await withVaultKey(user.id, async (masterKey, signal) => {
+            const rows = db.prepare(`SELECT p.object_id AS id, o.metadata_json
+              FROM vault_pending_imports p JOIN vault_objects o ON o.id = p.object_id
+              WHERE p.user_id = ? ORDER BY p.created_at LIMIT 101`).all(user.id);
+            const items = [];
+            for (const row of rows.slice(0, 100)) {
+              let metadata;
+              try { metadata = decryptVaultMetadata(JSON.parse(row.metadata_json), masterKey, user.id, row.id); }
+              catch { throw fail(500, 'vault_metadata_corrupt', '加密空間復原索引無法驗證；已停止處理。'); }
+              let sourceState = 'unavailable';
+              if (typeof metadata.sourceShareId === 'string' && typeof metadata.relativePath === 'string'
+                && typeof metadata.sourceDigest === 'string' && /^[a-f0-9]{64}$/u.test(metadata.sourceDigest)) {
+                try {
+                  const objectPath = path.join(dataDir, '.nanako-vault', user.id, `${row.id}.nkv`);
+                  await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), objectPath);
+                  const objectInfo = await lstat(objectPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+                  if (!objectInfo?.isFile() || objectInfo.isSymbolicLink()) {
+                    sourceState = 'ciphertext-missing';
+                    items.push({ id: row.id, name: metadata.name, size: metadata.size, shareId: metadata.sourceShareId, relativePath: metadata.relativePath, sourceState });
+                    continue;
+                  }
+                  const { share, root } = shareRoot(metadata.sourceShareId);
+                  requirePermission(user, share.id, true);
+                  const { target } = resolveShareInside(root, metadata.relativePath);
+                  await rejectSymlinkTraversal(dataDir, root, target);
+                  const info = await lstat(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+                  if (!info) sourceState = 'missing';
+                  else if (!info.isFile() || info.isSymbolicLink()) sourceState = 'changed';
+                  else {
+                    const current = await hashManagedFile(target, { signal });
+                    sourceState = current.size === metadata.size && current.digest === metadata.sourceDigest ? 'unchanged' : 'changed';
+                  }
+                } catch (error) {
+                  if (signal.aborted) throw fail(499, 'vault_recovery_cancelled', '復原檢查因加密空間鎖定而取消。');
+                  sourceState = 'unavailable';
+                }
+              }
+              items.push({ id: row.id, name: metadata.name, size: metadata.size, shareId: metadata.sourceShareId, relativePath: metadata.relativePath, sourceState });
+            }
+            return json(res, 200, { items, truncated: rows.length > 100 });
+          });
+        }
+        const vaultRecoveryRoute = /^\/api\/vault\/recovery\/([0-9a-f-]{36})$/iu.exec(route);
+        if (vaultRecoveryRoute && method === 'POST') {
+          const objectId = vaultRecoveryRoute[1].toLowerCase();
+          const body = await readJson(req);
+          if (!['complete', 'keep'].includes(body.action)) throw fail(400, 'invalid_recovery_action', '復原操作不正確。');
+          return await withVaultKey(user.id, async (masterKey, signal) => {
+            const row = db.prepare(`SELECT o.metadata_json FROM vault_pending_imports p
+              JOIN vault_objects o ON o.id = p.object_id WHERE p.object_id = ? AND p.user_id = ?`).get(objectId, user.id);
+            if (!row) throw fail(404, 'vault_recovery_not_found', '找不到待確認的加密空間移入作業。');
+            let metadata;
+            try { metadata = decryptVaultMetadata(JSON.parse(row.metadata_json), masterKey, user.id, objectId); }
+            catch { throw fail(500, 'vault_metadata_corrupt', '加密空間復原索引無法驗證；已停止處理。'); }
+            if (body.action === 'keep') {
+              const objectPath = path.join(dataDir, '.nanako-vault', user.id, `${objectId}.nkv`);
+              await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), objectPath);
+              const objectInfo = await lstat(objectPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+              if (!objectInfo) db.prepare('DELETE FROM vault_objects WHERE id = ? AND user_id = ?').run(objectId, user.id);
+              else {
+                if (!objectInfo.isFile() || objectInfo.isSymbolicLink()) throw fail(409, 'vault_recovery_ciphertext_invalid', '加密路徑不是一般檔案；未變更復原資料。');
+                db.prepare('DELETE FROM vault_pending_imports WHERE object_id = ? AND user_id = ?').run(objectId, user.id);
+              }
+              return json(res, 200, { ok: true, action: 'keep' });
+            }
+            if (typeof metadata.sourceShareId !== 'string' || typeof metadata.relativePath !== 'string'
+              || typeof metadata.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(metadata.sourceDigest)) {
+              throw fail(409, 'vault_recovery_unavailable', '此筆移入作業缺少安全復原資訊；請保留目前檔案並選擇「保留原檔」。');
+            }
+            const { share, root } = shareRoot(metadata.sourceShareId);
+            requirePermission(user, share.id, true);
+            const { target: sourcePath } = resolveShareInside(root, metadata.relativePath);
+            const objectPath = path.join(dataDir, '.nanako-vault', user.id, `${objectId}.nkv`);
+            await rejectSymlinkTraversal(dataDir, path.join(dataDir, '.nanako-vault'), objectPath);
+            const objectInfo = await lstat(objectPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+            if (!objectInfo?.isFile() || objectInfo.isSymbolicLink()) throw fail(409, 'vault_recovery_ciphertext_missing', '加密檔案本體不存在；未移除來源檔案。請保留原檔並清除無效索引。');
+            const objectKey = deriveVaultObjectKey(masterKey, user.id, objectId);
+            const encryptedHash = crypto.createHash('sha256');
+            let encryptedSize = 0;
+            try {
+              for await (const chunk of decryptVaultStream(createReadStream(objectPath, { signal }), { key: objectKey, objectId })) {
+                encryptedHash.update(chunk);
+                encryptedSize += chunk.length;
+              }
+            } catch {
+              if (signal.aborted) throw fail(499, 'vault_recovery_cancelled', '復原作業因加密空間鎖定而取消。');
+              throw fail(409, 'vault_recovery_ciphertext_invalid', '加密檔案驗證失敗；未移除來源檔案，請保留原檔。');
+            } finally { objectKey.fill(0); }
+            if (encryptedSize !== metadata.size || encryptedHash.digest('hex') !== metadata.sourceDigest) {
+              throw fail(409, 'vault_recovery_ciphertext_invalid', '加密檔案內容與來源驗證資料不符；未移除來源檔案，請保留原檔。');
+            }
+            await withPathLock(sourcePath, async () => {
+              await rejectSymlinkTraversal(dataDir, root, sourcePath);
+              const before = await lstat(sourcePath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+              if (before) {
+                if (!before.isFile() || before.isSymbolicLink()) throw fail(409, 'vault_recovery_changed', '原始路徑已不再是一般檔案；為避免刪錯，未移除任何檔案。');
+                let current;
+                try { current = await hashManagedFile(sourcePath, { signal }); }
+                catch {
+                  if (signal.aborted) throw fail(499, 'vault_recovery_cancelled', '復原作業因加密空間鎖定而取消。');
+                  throw fail(409, 'vault_recovery_changed', '無法驗證原始檔案；為避免刪錯，未移除任何檔案。');
+                }
+                const after = await lstat(sourcePath).catch(() => null);
+                if (!after?.isFile() || after.isSymbolicLink() || after.size !== before.size || after.mtimeMs !== before.mtimeMs
+                  || (before.ino && after.ino !== before.ino) || before.dev !== after.dev || before.ctimeMs !== after.ctimeMs
+                  || current.dev !== before.dev || current.ino !== before.ino || current.ctimeMs !== before.ctimeMs
+                  || current.size !== metadata.size || current.digest !== metadata.sourceDigest) {
+                  throw fail(409, 'vault_recovery_changed', '原始檔案內容已變更；為避免刪錯，未移除任何檔案。請選擇「保留原檔」。');
+                }
+                await unlink(sourcePath);
+              }
+              db.prepare('DELETE FROM vault_pending_imports WHERE object_id = ? AND user_id = ?').run(objectId, user.id);
+            });
+            return json(res, 200, { ok: true, action: 'complete' });
+          });
+        }
         if (route === '/api/vault/objects/import' && method === 'POST') {
           const body = await readJson(req);
           const shareId = String(body.shareId || '');
@@ -977,6 +1101,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               const mediaType = mediaTypes.get(path.extname(name).toLowerCase()) || 'application/octet-stream';
               const metadata = encryptVaultMetadata({
                 name,
+                sourceShareId: share.id,
+                sourceDigest,
                 relativePath: parts.join('/'),
                 size: encrypted.plaintextBytes,
                 modifiedAt: sourceInfo.mtime.toISOString(),
@@ -984,19 +1110,27 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
               }, masterKey, user.id, objectId);
               await rename(temporaryPath, objectPath);
               finalCreated = true;
-              db.prepare('INSERT INTO vault_objects(id, user_id, metadata_json) VALUES(?,?,?)')
-                .run(objectId, user.id, JSON.stringify(metadata));
+              db.exec('BEGIN IMMEDIATE');
+              try {
+                db.prepare('INSERT INTO vault_objects(id, user_id, metadata_json) VALUES(?,?,?)')
+                  .run(objectId, user.id, JSON.stringify(metadata));
+                db.prepare('INSERT INTO vault_pending_imports(object_id, user_id, created_at) VALUES(?,?,?)')
+                  .run(objectId, user.id, new Date().toISOString());
+                db.exec('COMMIT');
+              } catch (error) {
+                try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
+                throw error;
+              }
               indexed = true;
               if (importController.signal.aborted) throw fail(499, 'vault_import_cancelled', '移入作業已取消；來源檔案未移除。');
+              let sourceRemovalPending = false;
               try { await unlink(sourcePath); }
-              catch {
-                db.prepare('DELETE FROM vault_objects WHERE id = ? AND user_id = ?').run(objectId, user.id);
-                indexed = false;
-                await rm(objectPath, { force: true }).catch(() => {});
-                finalCreated = false;
-                throw fail(409, 'vault_source_removal_failed', '密文已驗證，但原檔無法移除；已取消上鎖，請確認檔案仍可正常開啟後再試。');
+              catch { sourceRemovalPending = true; }
+              if (!sourceRemovalPending) {
+                try { db.prepare('DELETE FROM vault_pending_imports WHERE object_id = ? AND user_id = ?').run(objectId, user.id); }
+                catch { sourceRemovalPending = true; }
               }
-              return { id: objectId, name, size: encrypted.plaintextBytes, mediaType };
+              return { id: objectId, name, size: encrypted.plaintextBytes, mediaType, sourceRemovalPending };
             } catch (error) {
               sourceStream.destroy(); trackedSource.destroy(); output.destroy();
               await outputDone.catch(() => {});

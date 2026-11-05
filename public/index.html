@@ -187,6 +187,11 @@
           <span class="vault-open-mark" aria-hidden="true">✓</span><div><h3>加密空間已解鎖</h3><p class="muted">目前解鎖的是這個本機帳號的加密空間。關閉視窗、手動鎖定或登出會清除金鑰參照。</p></div>
         </section>
         <section id="vault-content-panel" class="vault-content-panel" hidden>
+          <section id="vault-recovery-panel" class="card vault-recovery-card" hidden>
+            <div class="content-heading"><div><h3>未完成的移入作業</h3><p class="muted">Nanako 上次可能在完成移入前關閉。請檢查來源檔案狀態，再選擇完成上鎖或保留原檔。</p></div><button id="vault-recovery-refresh" class="button secondary" type="button">重新檢查</button></div>
+            <div id="vault-recovery-list" class="vault-recovery-list"></div>
+            <p id="vault-recovery-truncated" class="inline-message" hidden>待處理作業超過畫面上限，請完成或保留目前項目後重新整理。</p>
+          </section>
           <section class="card vault-browser-card">
             <div class="content-heading"><div><h3>從 Nanako 資料空間移入</h3><p class="muted">只能選擇 NanakoData 內已管理的檔案；移入完成後會移除原始檔案路徑。</p></div></div>
             <div class="file-controls vault-source-controls"><label class="field-inline">來源資料空間<select id="vault-source-share" aria-label="加密空間來源資料空間"></select></label><button id="vault-source-up" class="button secondary" type="button">上層資料夾</button><button id="vault-source-refresh" class="button secondary" type="button">重新整理</button><span id="vault-source-path" class="vault-source-path">主資料夾</span></div>

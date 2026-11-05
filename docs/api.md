@@ -48,7 +48,9 @@
 | `POST /api/vault/unlock` | 是 | JSON `{ "password" }`；錯誤密碼回傳 `401`，錯誤 5 次後節流 15 分鐘並回傳 `429`。解鎖金鑰只在服務程序記憶體中，閒置 15 分鐘後鎖定。 |
 | `POST /api/vault/lock` | 是 | 立即鎖定目前使用者加密空間；會取消進行中的加密／解密串流，作業清理完成後清除金鑰參照。 |
 | `GET /api/vault/objects` | 是 | 需要加密空間已解鎖；只列出目前使用者的加密物件及解密後中繼資料。未解鎖回傳 `423`。 |
-| `POST /api/vault/objects/import` | 是 | 需要加密空間已解鎖，且使用者對來源 Nanako 分享有讀寫權限；JSON `{ "shareId", "path" }`。只接受 NanakoData 中的一般檔案，串流加密並驗證後移除來源路徑；路徑外的檔案／磁碟不接受。 |
+| `GET /api/vault/recovery` | 是 | 需要加密空間已解鎖；列出索引交易中斷的移入作業。比對來源檔案 SHA-256，回報原檔相符、已不存在、已變更或目前不可檢查；不會自行刪除來源。 |
+| `POST /api/vault/recovery/{objectId}` | 是 | JSON `{ "action": "complete"\|"keep" }`。`complete` 只會在來源仍於 NanakoData 且內容雜湊與已加密版本一致時移除來源；來源已不存在時只結束復原標記；來源已變更或權限不足時拒絕。`keep` 保留一般檔案與密文，只清除待確認標記。 |
+| `POST /api/vault/objects/import` | 是 | 需要加密空間已解鎖，且使用者對來源 Nanako 分享有讀寫權限；JSON `{ "shareId", "path" }`。只接受 NanakoData 中的一般檔案，串流加密並驗證後移除來源路徑；索引提交與來源移除由 SQLite 復原標記保護。若來源無法移除，回傳 `item.sourceRemovalPending: true`，應於解鎖後檢查復原清單。路徑外的檔案／磁碟不接受。 |
 | `GET /api/vault/objects/{objectId}/content` | 是 | 需要已解鎖且該物件屬於目前使用者；只提供允許清單中的圖片／音訊／影片 MIME，支援單一 byte-range。每個被讀取區塊都需通過 GCM 驗證；不產生明文暫存檔。 |
 | `DELETE /api/vault/objects/{objectId}` | 是 | 需要加密空間已解鎖；JSON `{ "confirmText": "永久刪除" }`；由伺服器再次驗證確認文字並永久刪除密文物件，不移至資源回收桶。 |
 | `POST /api/duplicates/scan` | 是 | 需有分享資料夾讀取權限；JSON `{ "shareId" }`；以非同步工作掃描 Nanako 管理範圍，回傳 `202` 與 `scanId`。每次最多檢查 100,000 個項目；同一位使用者同時僅可執行一項掃描。 |
