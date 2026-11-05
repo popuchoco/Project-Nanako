@@ -72,8 +72,8 @@ async function readJson(req) {
 function safeName(value) {
   if (typeof value !== 'string') throw fail(400, 'invalid_name', '名稱不正確。');
   const name = value.trim();
-  if (!name || name.length > 180 || name === '.' || name === '..' || /[\\/\0<>:"|?*]/u.test(name)) {
-    throw fail(400, 'invalid_name', '名稱不可空白，也不能包含路徑或 Windows 保留字元。');
+  if (!name || name.length > 180 || name === '.' || name === '..' || name.toLocaleLowerCase('en-US') === '.nanako-trash' || name.toLocaleLowerCase('en-US').startsWith('.localnas-') || /[\\/\0<>:"|?*]/u.test(name)) {
+    throw fail(400, 'invalid_name', '名稱不可空白，也不能使用 Windows 或 Nanako 保留名稱。');
   }
   if (/[. ]$/u.test(name)) throw fail(400, 'invalid_name', '名稱不能以句點或空白結尾。');
   if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu.test(name)) {
@@ -102,11 +102,81 @@ function resolveInside(root, relative = '') {
 
 function resolveShareInside(root, relative = '') {
   const resolved = resolveInside(root, relative);
-  if (resolved.parts[0]?.toLocaleLowerCase('en-US') === '.nanako-trash') {
+  if (resolved.parts.some((part) => part.toLocaleLowerCase('en-US') === '.nanako-trash')
+    || resolved.parts.some((part) => part.toLocaleLowerCase('en-US').startsWith('.localnas-'))) {
     throw fail(404, 'not_found', '找不到這個項目。');
   }
   return resolved;
 }
+
+const MAX_COPY_ENTRIES = 100_000;
+
+async function measureCopyTree(source, totals = { bytes: 0, entries: 0 }) {
+  const info = await lstat(source);
+  if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
+  if (info.isFile()) totals.bytes += info.size;
+  else if (!info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援複製一般檔案與資料夾。');
+  totals.entries += 1;
+  if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
+  if (info.isDirectory()) {
+    for (const entry of await readdir(source, { withFileTypes: true })) {
+      const normalizedName = entry.name.toLocaleLowerCase('en-US');
+      if (normalizedName.startsWith('.localnas-') || normalizedName === '.nanako-trash') continue;
+      await measureCopyTree(path.join(source, entry.name), totals);
+    }
+  }
+  return totals;
+}
+
+async function copyManagedTree(source, destination, totals = { entries: 0 }) {
+  const info = await lstat(source);
+  if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
+  if (info.isFile()) {
+    totals.entries += 1;
+    if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
+    await pipeline(createReadStream(source), createWriteStream(destination, { flags: 'wx' }));
+    return totals;
+  }
+  if (!info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援複製一般檔案與資料夾。');
+  totals.entries += 1;
+  if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
+  await mkdir(destination);
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    const normalizedName = entry.name.toLocaleLowerCase('en-US');
+    if (normalizedName.startsWith('.localnas-') || normalizedName === '.nanako-trash') continue;
+    await copyManagedTree(path.join(source, entry.name), path.join(destination, entry.name), totals);
+  }
+  return totals;
+}
+
+async function itemExists(target) {
+  try { await lstat(target); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+const mutationLocks = new Map();
+async function withPathLockKey(key, operation) {
+  const previous = mutationLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  mutationLocks.set(key, current);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (mutationLocks.get(key) === current) mutationLocks.delete(key);
+  }
+}
+
+async function withPathLocks(targets, operation) {
+  const keys = [...new Set(targets.map((target) => path.resolve(target).toLocaleLowerCase('en-US')))].sort();
+  const acquire = (index) => index === keys.length
+    ? operation()
+    : withPathLockKey(keys[index], () => acquire(index + 1));
+  return acquire(0);
+}
+
+const withPathLock = (target, operation) => withPathLocks([target], operation);
 
 async function rejectSymlinkTraversal(managedRoot, root, target, includeLeaf = true) {
   managedRoot = path.resolve(managedRoot);
@@ -381,6 +451,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'GET' && route === '/api/download') return { action: '下載檔案', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/folders') return { action: '建立資料夾', target: target(url.searchParams.get('path')) };
     if (method === 'POST' && route === '/api/upload') return { action: '匯入檔案', target: target(`${url.searchParams.get('path') ? `${url.searchParams.get('path')}/` : ''}${url.searchParams.get('name')}`) };
+    if (method === 'POST' && route === '/api/files/rename') return { action: '重新命名檔案', target: '檔案項目' };
+    if (method === 'POST' && route === '/api/files/move') return { action: '移動檔案', target: '檔案項目' };
+    if (method === 'POST' && route === '/api/files/copy') return { action: '複製檔案', target: '檔案項目' };
     if (method === 'DELETE' && route === '/api/files') return { action: '移至資源回收桶', target: target(url.searchParams.get('path')) };
     if (method === 'GET' && route === '/api/trash') return { action: '檢視資源回收桶', target: '資源回收桶' };
     if (method === 'POST' && route === '/api/trash/restore') return { action: '還原資源回收桶項目', target: '資源回收桶項目' };
@@ -585,7 +658,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const entries = await readdir(target, { withFileTypes: true });
           const items = [];
           for (const entry of entries) {
-            if (entry.name.startsWith('.localnas-') || entry.name.toLocaleLowerCase('en-US') === '.nanako-trash') continue;
+            if (entry.name.toLocaleLowerCase('en-US').startsWith('.localnas-') || entry.name.toLocaleLowerCase('en-US') === '.nanako-trash') continue;
             const itemPath = path.join(target, entry.name);
             const itemInfo = await lstat(itemPath);
             if (itemInfo.isSymbolicLink()) continue;
@@ -605,8 +678,110 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
           const name = safeName(body.name);
           const target = path.join(parent.target, name);
-          await mkdir(target).catch((error) => { if (error.code === 'EEXIST') throw fail(409, 'already_exists', '同名項目已存在。'); throw error; });
-          return json(res, 201, { ok: true });
+          return await withPathLock(target, async () => {
+            await mkdir(target).catch((error) => { if (error.code === 'EEXIST') throw fail(409, 'already_exists', '同名項目已存在。'); throw error; });
+            return json(res, 201, { ok: true });
+          });
+        }
+        if (route === '/api/files/rename' && method === 'POST') {
+          const body = await readJson(req);
+          const shareId = String(body.shareId || '');
+          requirePermission(user, shareId, true);
+          const { root } = shareRoot(shareId);
+          const { target: source, parts } = resolveShareInside(root, body.path || '');
+          if (!parts.length) throw fail(400, 'cannot_rename_root', '不能重新命名資料空間本身。');
+          const name = safeName(body.newName);
+          const parent = resolveShareInside(root, parts.slice(0, -1).join('/'));
+          await rejectSymlinkTraversal(dataDir, root, source);
+          await rejectSymlinkTraversal(dataDir, root, parent.target);
+          const info = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+          if (!info || info.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
+          if (!info.isFile() && !info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援重新命名一般檔案與資料夾。');
+          const destination = path.join(parent.target, name);
+          if (destination === source) return json(res, 200, { ok: true, name: parts.at(-1), unchanged: true });
+          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...parts.slice(0, -1), name].join('/')}`;
+          return await withPathLocks([source, destination], async () => {
+            const exists = await itemExists(destination);
+            const caseOnlyRename = process.platform === 'win32' && destination.toLocaleLowerCase('en-US') === source.toLocaleLowerCase('en-US');
+            if (exists && !caseOnlyRename) throw fail(409, 'already_exists', '目的地已有同名項目。');
+            if (caseOnlyRename) {
+              const temporary = path.join(parent.target, `.localnas-rename-${crypto.randomUUID()}.tmp`);
+              await rename(source, temporary);
+              try { await rename(temporary, destination); }
+              catch (error) { await rename(temporary, source).catch(() => {}); throw error; }
+              return json(res, 200, { ok: true, name });
+            }
+            await rename(source, destination);
+            return json(res, 200, { ok: true, name });
+          });
+        }
+        if (route === '/api/files/move' && method === 'POST') {
+          const body = await readJson(req);
+          const shareId = String(body.shareId || '');
+          requirePermission(user, shareId, true);
+          const { root } = shareRoot(shareId);
+          const { target: source, parts } = resolveShareInside(root, body.path || '');
+          if (!parts.length) throw fail(400, 'cannot_move_root', '不能移動資料空間本身。');
+          const destinationDirectory = resolveShareInside(root, body.destinationPath || '');
+          await rejectSymlinkTraversal(dataDir, root, source);
+          await rejectSymlinkTraversal(dataDir, root, destinationDirectory.target);
+          const sourceInfo = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+          if (!sourceInfo || sourceInfo.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
+          if (!sourceInfo.isFile() && !sourceInfo.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援移動一般檔案與資料夾。');
+          if (!(await stat(destinationDirectory.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到目的地資料夾。');
+          if (sourceInfo.isDirectory()) {
+            const relativeDestination = path.relative(source, destinationDirectory.target);
+            if (!relativeDestination || (relativeDestination !== '..' && !relativeDestination.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDestination))) {
+              throw fail(400, 'cannot_move_into_self', '資料夾不能移至自己或其子資料夾內。');
+            }
+          }
+          const destination = path.join(destinationDirectory.target, parts.at(-1));
+          if (destination === source) return json(res, 200, { ok: true, unchanged: true });
+          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...relativeParts(body.destinationPath || ''), parts.at(-1)].join('/')}`;
+          return await withPathLocks([source, destination], async () => {
+            if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
+            await rename(source, destination);
+            return json(res, 200, { ok: true });
+          });
+        }
+        if (route === '/api/files/copy' && method === 'POST') {
+          const body = await readJson(req);
+          const shareId = String(body.shareId || '');
+          requirePermission(user, shareId, true);
+          const { root } = shareRoot(shareId);
+          const { target: source, parts } = resolveShareInside(root, body.path || '');
+          if (!parts.length) throw fail(400, 'cannot_copy_root', '不能複製資料空間本身。');
+          const destinationDirectory = resolveShareInside(root, body.destinationPath || '');
+          await rejectSymlinkTraversal(dataDir, root, source);
+          await rejectSymlinkTraversal(dataDir, root, destinationDirectory.target);
+          const sourceInfo = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+          if (!sourceInfo || sourceInfo.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
+          if (!(await stat(destinationDirectory.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到目的地資料夾。');
+          if (sourceInfo.isDirectory()) {
+            const relativeDestination = path.relative(source, destinationDirectory.target);
+            if (!relativeDestination || (relativeDestination !== '..' && !relativeDestination.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDestination))) {
+              throw fail(400, 'cannot_copy_into_self', '資料夾不能複製至自己或其子資料夾內。');
+            }
+          }
+          const destination = path.join(destinationDirectory.target, parts.at(-1));
+          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...relativeParts(body.destinationPath || ''), parts.at(-1)].join('/')}`;
+          return await withPathLocks([source, destination], async () => {
+            if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
+            const measurement = await measureCopyTree(source);
+            const free = await statfs(dataDir, { bigint: true });
+            const availableBytes = free.bavail * free.bsize;
+            if (measurement.bytes > availableBytes) throw fail(507, 'insufficient_storage', 'Nanako 資料空間所在磁碟容量不足。');
+            const temporary = path.join(destinationDirectory.target, `.localnas-copy-${crypto.randomUUID()}.tmp`);
+            try {
+              await copyManagedTree(source, temporary);
+              if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
+              await rename(temporary, destination);
+            } catch (error) {
+              await rm(temporary, { recursive: true, force: true }).catch(() => {});
+              throw error;
+            }
+            return json(res, 201, { ok: true, entries: measurement.entries, bytes: measurement.bytes });
+          });
         }
         if (route === '/api/upload' && method === 'POST') {
           const shareId = url.searchParams.get('shareId') || '';
@@ -626,7 +801,10 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           });
           try {
             await pipeline(req, limiter, createWriteStream(tempPath, { flags: 'wx' }));
-            await rename(tempPath, target);
+            await withPathLock(target, async () => {
+              if (await itemExists(target)) throw fail(409, 'already_exists', '同名項目已存在。');
+              await rename(tempPath, target);
+            });
           } catch (error) {
             await rm(tempPath, { force: true }).catch(() => {});
             throw error;

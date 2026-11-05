@@ -128,3 +128,14 @@
 
 /* 帳號權限與密碼管理 */
 .user-card{border-top:1px solid #edf1f2;padding:10px 0}.user-row{border:0;padding:3px 0 8px}.user-badges{display:flex;gap:6px;align-items:center}.user-disabled{background:#fbecea;color:#873b34}.user-permission-details{font-size:12px}.user-permission-details summary{cursor:pointer;color:var(--accent);font-weight:600;padding:7px 0}.user-permission-form{padding:8px 0 6px}.user-permission-form fieldset{margin:0}.user-permission-form .button{justify-self:start}.account-active-toggle{display:flex!important;align-items:center;gap:8px!important}.account-active-toggle input{width:16px!important;height:16px;accent-color:var(--accent)}#change-password-form label{display:grid;gap:6px}#change-password-form input{margin-top:0}
+
+/* 基本檔案操作與批次選取 */
+.file-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:8px 12px;border-bottom:1px solid var(--line);background:#fbfcfc;color:var(--muted);font-size:12px}
+.file-batch-toolbar .button{min-height:32px;font-size:11px;padding:0 10px}
+.button.danger-outline{border-color:#e0c7c3;color:var(--danger)}.button.danger-outline:hover{background:#fbefed}
+.file-select-column{width:38px;text-align:center!important;padding-left:12px!important;padding-right:4px!important}
+.file-select-column input{width:15px;height:15px;accent-color:var(--accent);vertical-align:middle}
+.app-window .file-batch-toolbar{min-height:46px;padding:7px 10px;font-size:10px}
+.app-window .file-batch-toolbar .toolbar{gap:5px}.app-window .file-batch-toolbar .button{min-height:29px;padding:0 8px;font-size:10px}
+.app-window .row-actions{flex-wrap:wrap;gap:2px}.app-window .text-action{font-size:10px;padding:4px}
+@media(max-width:650px){.file-batch-toolbar{align-items:flex-start;flex-direction:column}.file-batch-toolbar .toolbar{width:100%}.file-batch-toolbar .toolbar .button{flex:1;padding:0 6px}.row-actions{flex-wrap:wrap}.file-select-column{width:32px;padding-left:8px!important;padding-right:2px!important}td:last-child,th:last-child{width:150px}}

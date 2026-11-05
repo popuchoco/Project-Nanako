@@ -3,6 +3,7 @@ const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: 'files',
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
+  selectedItems: new Set(), canWrite: false,
   windowState: 'open', windowMaximized: false, windowRestoreRect: null, desktopClockTimer: null,
 };
 const mediaExtensions = {
@@ -46,6 +47,7 @@ function selectShare(shareId) {
   if (shareId === state.shareId) return;
   state.shareId = shareId;
   state.path = ''; state.albumPath = ''; state.playerPath = '';
+  state.selectedItems.clear();
   state.currentItems = []; state.albumItems = []; state.albumImages = []; state.playerItems = [];
   state.pendingTrackPath = ''; state.activeTrackPath = '';
   resetPlayer();
@@ -326,22 +328,45 @@ function renderBreadcrumb(container, currentPath, onNavigate) {
   }
 }
 
+function navigateFiles(nextPath) {
+  if (nextPath !== state.path) state.selectedItems.clear();
+  state.path = nextPath;
+  loadFiles();
+}
+
+function updateBatchToolbar() {
+  const count = state.selectedItems.size;
+  $('#selected-file-count').textContent = count ? `已選取 ${count} 個項目` : '尚未選取項目';
+  for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = !state.canWrite || count === 0;
+  const selectAll = $('#select-all-files');
+  const selectedVisible = state.currentItems.filter((item) => state.selectedItems.has(item.name)).length;
+  selectAll.checked = state.currentItems.length > 0 && selectedVisible === state.currentItems.length;
+  selectAll.indeterminate = selectedVisible > 0 && selectedVisible < state.currentItems.length;
+  selectAll.disabled = !state.currentItems.length || !state.canWrite;
+}
+
 async function loadFiles() {
-  if (!state.shareId) { $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, (next) => { state.path = next; loadFiles(); }); return; }
+  if (!state.shareId) { state.currentItems = []; state.canWrite = false; $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return; }
   try {
     const query = new URLSearchParams({ shareId: state.shareId, path: state.path });
     const { items, canWrite } = await api(`/api/files?${query}`);
     state.currentItems = items;
-    renderBreadcrumb($('#breadcrumb'), state.path, (next) => { state.path = next; loadFiles(); });
+    state.canWrite = canWrite;
+    for (const selected of [...state.selectedItems]) if (!items.some((item) => item.name === selected)) state.selectedItems.delete(selected);
+    renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles);
     const body = $('#file-list'); body.replaceChildren();
     $('#empty-files').hidden = items.length !== 0;
     $('#new-folder').disabled = !canWrite; $('#file-input').disabled = !canWrite;
     for (const item of items) {
       const row = document.createElement('tr');
+      const selectCell = document.createElement('td'); selectCell.className = 'file-select-column';
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selectedItems.has(item.name); checkbox.disabled = !canWrite; checkbox.setAttribute('aria-label', `選取${item.name}`);
+      checkbox.addEventListener('change', () => { if (checkbox.checked) state.selectedItems.add(item.name); else state.selectedItems.delete(item.name); updateBatchToolbar(); });
+      selectCell.append(checkbox);
       const nameCell = document.createElement('td'); const wrapper = document.createElement('div'); wrapper.className = 'item-name';
       const icon = document.createElement('span'); icon.className = `item-icon${item.isDirectory ? ' folder' : ''}`; icon.setAttribute('aria-hidden', 'true'); icon.textContent = item.isDirectory ? '▰' : '▧';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = item.name;
-      if (item.isDirectory) open.addEventListener('click', () => { state.path = state.path ? `${state.path}/${item.name}` : item.name; loadFiles(); });
+      if (item.isDirectory) open.addEventListener('click', () => navigateFiles(state.path ? `${state.path}/${item.name}` : item.name));
       else open.addEventListener('click', () => openFile(item));
       wrapper.append(icon, open); nameCell.append(wrapper);
       const dateCell = document.createElement('td'); dateCell.textContent = formatDate(item.modifiedAt);
@@ -349,6 +374,7 @@ async function loadFiles() {
       const actionCell = document.createElement('td');
       if (canWrite) {
         const actions = document.createElement('div'); actions.className = 'row-actions';
+        const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'text-action'; rename.textContent = '重新命名'; rename.addEventListener('click', () => renameItem(item.name)); actions.append(rename);
         if (!item.name.toLocaleLowerCase('en-US').endsWith('.zip')) {
           const compress = document.createElement('button'); compress.type = 'button'; compress.className = 'text-action'; compress.textContent = '壓縮 ZIP';
           compress.addEventListener('click', () => runArchiveAction(item.name, 'create', compress)); actions.append(compress);
@@ -359,8 +385,9 @@ async function loadFiles() {
         const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-action danger'; remove.textContent = '移至回收桶'; remove.addEventListener('click', () => deleteItem(item.name)); actions.append(remove);
         actionCell.append(actions);
       }
-      row.append(nameCell, dateCell, sizeCell, actionCell); body.append(row);
+      row.append(selectCell, nameCell, dateCell, sizeCell, actionCell); body.append(row);
     }
+    updateBatchToolbar();
   } catch (error) { notify(error.message, true); }
 }
 
@@ -422,7 +449,58 @@ async function download(name) {
 async function deleteItem(name) {
   if (!confirm(`要將「${name}」移至資源回收桶嗎？`)) return;
   const query = new URLSearchParams({ shareId: state.shareId, path: joinedPath(name) });
-  await api(`/api/files?${query}`, { method: 'DELETE' }); notify('已移至資源回收桶。'); loadFiles();
+  try { await api(`/api/files?${query}`, { method: 'DELETE' }); state.selectedItems.delete(name); notify('已移至資源回收桶。'); await loadFiles(); }
+  catch (error) { notify(error.message, true); }
+}
+
+async function renameItem(name) {
+  const newName = prompt('請輸入新的檔案或資料夾名稱', name);
+  if (newName === null || newName.trim() === name) return;
+  try {
+    await api('/api/files/rename', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: joinedPath(name), newName }) });
+    state.selectedItems.delete(name);
+    notify(`已重新命名為「${newName.trim()}」。`);
+    await loadFiles();
+  } catch (error) { notify(`重新命名失敗：${error.message}`, true); }
+}
+
+async function batchFileOperation(operation) {
+  const names = [...state.selectedItems];
+  if (!names.length || !state.canWrite) return;
+  const destinationPath = prompt('請輸入 Nanako 資料空間內的目的地資料夾路徑；留白代表主資料夾。', '');
+  if (destinationPath === null) return;
+  const labels = { move: '移動', copy: '複製' };
+  for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = true;
+  let succeeded = 0;
+  const errors = [];
+  for (const name of names) {
+    try {
+      await api(`/api/files/${operation}`, { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: joinedPath(name), destinationPath: destinationPath.trim() }) });
+      succeeded += 1;
+      if (operation === 'move') state.selectedItems.delete(name);
+    } catch (error) { errors.push(`${name}：${error.message}`); }
+  }
+  await loadFiles();
+  const message = `${labels[operation]}完成 ${succeeded}/${names.length} 個項目${errors.length ? `；失敗：${errors.slice(0, 3).join('；')}` : '。'}`;
+  notify(message, errors.length > 0);
+}
+
+async function batchDeleteItems() {
+  const names = [...state.selectedItems];
+  if (!names.length || !state.canWrite || !confirm(`確定要將選取的 ${names.length} 個項目移至資源回收桶嗎？`)) return;
+  for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = true;
+  let succeeded = 0;
+  const errors = [];
+  for (const name of names) {
+    try {
+      const query = new URLSearchParams({ shareId: state.shareId, path: joinedPath(name) });
+      await api(`/api/files?${query}`, { method: 'DELETE' });
+      state.selectedItems.delete(name);
+      succeeded += 1;
+    } catch (error) { errors.push(`${name}：${error.message}`); }
+  }
+  await loadFiles();
+  notify(`已移至資源回收桶 ${succeeded}/${names.length} 個項目${errors.length ? `；失敗：${errors.slice(0, 3).join('；')}` : '。'}`, errors.length > 0);
 }
 
 async function loadTrash() {
@@ -918,6 +996,14 @@ for (const selector of ['#share-select', '#trash-share-select', '#album-share-se
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
 $('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
+$('#select-all-files').addEventListener('change', (event) => {
+  if (event.target.checked) for (const item of state.currentItems) state.selectedItems.add(item.name);
+  else for (const item of state.currentItems) state.selectedItems.delete(item.name);
+  loadFiles();
+});
+$('#batch-move').addEventListener('click', () => batchFileOperation('move'));
+$('#batch-copy').addEventListener('click', () => batchFileOperation('copy'));
+$('#batch-delete').addEventListener('click', batchDeleteItems);
 $('#file-input').addEventListener('change', async (event) => { const files = [...event.target.files]; for (const file of files) { const query = new URLSearchParams({ shareId: state.shareId, path: state.path, name: file.name }); try { await api(`/api/upload?${query}`, { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' } }); } catch (error) { notify(`${file.name}：${error.message}`, true); } } event.target.value = ''; loadFiles(); });
 $('#user-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const permissions = state.shares.flatMap((share) => { const read = event.currentTarget.elements[`read-${share.id}`].checked; const write = event.currentTarget.elements[`write-${share.id}`].checked; return read ? [{ shareId: share.id, canRead: read, canWrite: write }] : []; }); const message = $('#user-message'); try { await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) }); event.currentTarget.reset(); message.textContent = '使用者已建立。'; message.classList.remove('error'); message.hidden = false; loadUsers(); } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; } });
 

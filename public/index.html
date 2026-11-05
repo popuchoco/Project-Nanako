@@ -84,7 +84,8 @@
       <section id="view-files" class="view-panel">
         <div class="content-heading"><div><h2>檔案</h2><p class="muted">檔案只能存放與管理於 Nanako 可攜式資料目錄；其他磁碟與 Windows 個人資料夾不會列入。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">匯入檔案<input id="file-input" type="file" multiple hidden></label></div></div>
         <div class="file-controls"><label class="field-inline">資料空間<select id="share-select" aria-label="選擇資料空間"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
-        <div class="table-wrap"><table><thead><tr><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
+        <div class="file-batch-toolbar" aria-label="批次檔案操作"><span id="selected-file-count" aria-live="polite">尚未選取項目</span><div class="toolbar"><button id="batch-move" class="button secondary" type="button" disabled>批次移動</button><button id="batch-copy" class="button secondary" type="button" disabled>批次複製</button><button id="batch-delete" class="button secondary danger-outline" type="button" disabled>批次移至回收桶</button></div></div>
+        <div class="table-wrap"><table><thead><tr><th scope="col" class="file-select-column"><input id="select-all-files" type="checkbox" aria-label="選取目前資料夾的所有項目"></th><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
         <p id="file-message" class="inline-message" role="status" hidden></p>
       </section>
 

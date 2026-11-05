@@ -55,6 +55,67 @@ test('setup, login, file transfer, recycle bin and restore work locally', async 
   assert.equal(restored.body, '本機測試內容');
 });
 
+test('rename, move, copy and batch-operation APIs stay inside NanakoData', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const post = (route, body) => request(route, { method: 'POST', headers: auth, body: JSON.stringify({ shareId, ...body }) });
+  for (const [parent, name] of [['', 'Source'], ['', 'Destination'], ['', 'Destination2'], ['Source', 'Nested'], ['Source', 'Empty']]) {
+    const created = await post('/api/folders', { path: parent, name });
+    assert.equal(created.response.status, 201);
+  }
+  const upload = async (folder, name, contents) => request(`/api/upload?${new URLSearchParams({ shareId, path: folder, name })}`, { method: 'POST', headers: { Cookie: cookie }, body: Buffer.from(contents) });
+  assert.equal((await upload('', 'draft.txt', '移動測試')).response.status, 201);
+  assert.equal((await upload('Source', 'inside.txt', '複製測試')).response.status, 201);
+  assert.equal((await upload('Source/Nested', 'nested.txt', '巢狀內容')).response.status, 201);
+
+  const renamed = await post('/api/files/rename', { path: 'draft.txt', newName: 'renamed.txt' });
+  assert.equal(renamed.response.status, 200);
+  const badRename = await post('/api/files/rename', { path: 'renamed.txt', newName: 'CON.txt' });
+  assert.equal(badRename.response.status, 400);
+  const reservedRename = await post('/api/files/rename', { path: 'renamed.txt', newName: '.localnas-temp' });
+  assert.equal(reservedRename.response.status, 400);
+  const reservedFolder = await post('/api/folders', { path: 'Source', name: '.nanako-trash' });
+  assert.equal(reservedFolder.response.status, 400);
+  const collisionRename = await post('/api/files/rename', { path: 'Source', newName: 'Destination' });
+  assert.equal(collisionRename.response.status, 409);
+
+  const moved = await post('/api/files/move', { path: 'renamed.txt', destinationPath: 'Destination' });
+  assert.equal(moved.response.status, 200);
+  const movedContents = await request(`/api/download?${new URLSearchParams({ shareId, path: 'Destination/renamed.txt' })}`, { headers: { Cookie: cookie } });
+  assert.equal(movedContents.body, '移動測試');
+  const moveIntoChild = await post('/api/files/move', { path: 'Source', destinationPath: 'Source/Nested' });
+  assert.equal(moveIntoChild.response.status, 400);
+
+  const copied = await post('/api/files/copy', { path: 'Source', destinationPath: 'Destination' });
+  assert.equal(copied.response.status, 201);
+  assert.equal(copied.body.entries, 5);
+  assert.equal(copied.body.bytes, Buffer.byteLength('複製測試巢狀內容'));
+  const copiedContents = await request(`/api/download?${new URLSearchParams({ shareId, path: 'Destination/Source/Nested/nested.txt' })}`, { headers: { Cookie: cookie } });
+  assert.equal(copiedContents.body, '巢狀內容');
+  const copiedFolder = await request(`/api/files?${new URLSearchParams({ shareId, path: 'Destination/Source' })}`, { headers: { Cookie: cookie } });
+  assert.equal(copiedFolder.body.items.some((item) => item.name === 'Empty' && item.isDirectory), true);
+  const copyCollisions = await Promise.all([
+    post('/api/files/copy', { path: 'Source', destinationPath: 'Destination2' }),
+    post('/api/files/copy', { path: 'Source', destinationPath: 'Destination2' }),
+  ]);
+  assert.deepEqual(copyCollisions.map((result) => result.response.status).sort(), [201, 409]);
+  const copyIntoChild = await post('/api/files/copy', { path: 'Source', destinationPath: 'Source/Nested' });
+  assert.equal(copyIntoChild.response.status, 400);
+  const hiddenTemp = await request(`/api/files?${new URLSearchParams({ shareId, path: 'Destination' })}`, { headers: { Cookie: cookie } });
+  assert.equal(hiddenTemp.body.items.some((item) => item.name.startsWith('.localnas-')), false);
+  const reservedPath = await request(`/api/files?${new URLSearchParams({ shareId, path: '.localnas-copy-test' })}`, { headers: { Cookie: cookie } });
+  assert.equal(reservedPath.response.status, 404);
+  const audit = await request('/api/audit-logs', { headers: { Cookie: cookie } });
+  for (const action of ['重新命名檔案', '移動檔案', '複製檔案']) assert.equal(audit.body.logs.some((log) => log.action === action), true);
+
+  const addViewer = await request('/api/users', { method: 'POST', headers: auth, body: JSON.stringify({ username: 'readonly', password: 'readonly-test-passphrase-2026', permissions: [{ shareId, canRead: true, canWrite: false }] }) });
+  assert.equal(addViewer.response.status, 201);
+  const login = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'readonly', password: 'readonly-test-passphrase-2026' }) });
+  const denied = await request('/api/files/rename', { method: 'POST', headers: { Cookie: login.response.headers.get('set-cookie').split(';')[0], 'Content-Type': 'application/json' }, body: JSON.stringify({ shareId, path: 'Source/inside.txt', newName: 'denied.txt' }) });
+  assert.equal(denied.response.status, 403);
+});
+
 test('users without an explicit share grant cannot read files', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie: adminCookie, shareId } = await setup();
