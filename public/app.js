@@ -1,16 +1,20 @@
+import { filterAndSortFiles, mediaKind } from './file-listing.mjs';
+
 const $ = (selector) => document.querySelector(selector);
 const state = {
-  user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: 'files',
+  user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: null,
   currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
-  selectedItems: new Set(), canWrite: false,
+  selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
-  windowState: 'open', windowMaximized: false, windowRestoreRect: null, desktopClockTimer: null,
+  windows: new Map(), windowZ: 10, desktopClockTimer: null,
 };
-const mediaExtensions = {
-  image: new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp']),
-  video: new Set(['mp4', 'm4v', 'mov', 'webm', 'ogv']),
-  audio: new Set(['mp3', 'm4a', 'aac', 'wav', 'oga', 'ogg', 'opus', 'flac']),
+const appDefinitions = {
+  files: { name: '檔案管理', icon: '▤' }, duplicates: { name: '檔案去重', icon: '⧉' },
+  album: { name: '相簿', icon: '▧' }, player: { name: '播放器', icon: '▶' },
+  trash: { name: '資源回收桶', icon: '⌫' }, users: { name: '使用者與權限', icon: '♙', adminOnly: true },
+  computer: { name: '儲存空間', icon: '▣' }, system: { name: '電腦資訊', icon: '▦', adminOnly: true },
+  settings: { name: '系統設定與紀錄', icon: '⚙', adminOnly: true }, network: { name: '網路狀態', icon: '⌁' },
 };
 const mediaProfiles = [
   { label: 'MP4／H.264＋AAC', kind: 'video', mime: 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"', extension: '.mp4、.m4v' },
@@ -27,11 +31,7 @@ const mediaProfiles = [
   { label: 'FLAC', kind: 'audio', mime: 'audio/flac', extension: '.flac' },
   { label: 'WebM／Opus', kind: 'audio', mime: 'audio/webm; codecs="opus"', extension: '.webm' },
 ];
-
-function mediaKind(name) {
-  const extension = name.split('.').at(-1)?.toLowerCase() || '';
-  return Object.entries(mediaExtensions).find(([, extensions]) => extensions.has(extension))?.[0] || '';
-}
+const fileCategoryLabels = { all: '我的檔案', image: '圖片', video: '影片', audio: '音訊', document: '文件' };
 
 function mediaUrl(shareId, filePath) {
   return `/api/preview?${new URLSearchParams({ shareId, path: filePath })}`;
@@ -53,6 +53,7 @@ function selectShare(shareId) {
   clearTimeout(state.duplicatePollTimer);
   state.shareId = shareId;
   state.path = ''; state.albumPath = ''; state.playerPath = '';
+  state.fileCategory = 'all'; state.fileSearch = ''; $('#file-search').value = '';
   state.selectedItems.clear();
   state.currentItems = []; state.albumItems = []; state.albumImages = []; state.playerItems = [];
   state.pendingTrackPath = ''; state.activeTrackPath = '';
@@ -61,11 +62,9 @@ function selectShare(shareId) {
   $('#duplicate-open-trash').hidden = true;
   resetPlayer();
   syncShareSelectors();
-  if (state.view === 'files') loadFiles();
-  if (state.view === 'trash') loadTrash();
-  if (state.view === 'album') loadAlbum();
-  if (state.view === 'player') loadPlayer();
-  if (state.view === 'duplicates') loadDuplicates();
+  for (const [view, entry] of state.windows) {
+    if (entry.status === 'open' || entry.status === 'minimized') loadView(view);
+  }
 }
 
 async function api(url, options = {}) {
@@ -129,11 +128,10 @@ function showApp() {
   $('#app-shell').hidden = false;
   $('#account-name').textContent = state.user.username;
   document.querySelectorAll('.admin-only').forEach((item) => { item.hidden = state.user.role !== 'admin'; });
-  setWindowState('open');
   updateDesktopClock();
   clearInterval(state.desktopClockTimer);
   state.desktopClockTimer = setInterval(updateDesktopClock, 15_000);
-  loadShares().then(() => showView(state.view));
+  loadShares().then(() => launchView('files')).catch((error) => notify(error.message, true));
 }
 
 async function loadShares() {
@@ -166,51 +164,113 @@ function renderPermissionOptions() {
   }
 }
 
-function showView(view) {
-  if (['users', 'system', 'settings'].includes(view) && state.user.role !== 'admin') view = 'files';
-  const previousView = state.view;
-  state.view = view;
-  if (previousView !== view) void api('/api/activity', { method: 'POST', body: JSON.stringify({ view }) }).catch(() => {});
-  clearTimeout(state.systemRefreshTimer);
-  const names = { files: '檔案管理', duplicates: '檔案去重', album: '相簿', player: '播放器', trash: '資源回收桶', users: '使用者與權限', computer: '儲存空間', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態' };
-  const icons = { files: '▤', duplicates: '⧉', album: '▧', player: '▶', trash: '⌫', users: '♙', computer: '▣', system: '▦', settings: '⚙', network: '⌁' };
-  $('#page-title').textContent = names[view];
-  $('#window-title').textContent = names[view];
-  $('#window-app-icon').textContent = icons[view] || '▤';
-  document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  document.querySelectorAll('.taskbar-app[data-open-view]').forEach((button) => button.classList.toggle('active', button.dataset.openView === view));
-  const dockApp = $('#dock-app');
-  dockApp.setAttribute('aria-label', `顯示${names[view]}視窗`);
-  dockApp.title = names[view];
-  dockApp.classList.toggle('active', state.windowState === 'open');
-  document.querySelectorAll('.view-panel').forEach((panel) => { panel.hidden = panel.id !== `view-${view}`; });
-  if (view === 'files') loadFiles();
-  if (view === 'duplicates') loadDuplicates();
-  if (view === 'album') loadAlbum();
-  if (view === 'player') { loadPlayer(); if (!state.mediaCompatibilityLoaded) loadMediaCompatibility(); }
-  if (view === 'trash') loadTrash();
-  if (view === 'users') loadUsers();
-  if (view === 'computer') loadComputer();
-  if (view === 'system') loadSystem();
-  if (view === 'settings') { loadAuditSettings(); loadAuditLogs(); }
-  if (view === 'network') loadNetwork();
+function loadView(view) {
+  if (view === 'files') void loadFiles();
+  if (view === 'duplicates') void loadDuplicates();
+  if (view === 'album') void loadAlbum();
+  if (view === 'player') { void loadPlayer(); if (!state.mediaCompatibilityLoaded) void loadMediaCompatibility(); }
+  if (view === 'trash') void loadTrash();
+  if (view === 'users') void loadUsers();
+  if (view === 'computer') void loadComputer();
+  if (view === 'system') void loadSystem();
+  if (view === 'settings') { void loadAuditSettings(); void loadAuditLogs(); }
+  if (view === 'network') void loadNetwork();
 }
 
-function setWindowState(nextState) {
-  state.windowState = nextState;
-  const windowElement = $('#app-window');
-  const dockApp = $('#dock-app');
-  windowElement.hidden = nextState !== 'open';
-  dockApp.classList.toggle('active', nextState === 'open');
-  dockApp.classList.toggle('running', nextState !== 'closed');
-  dockApp.setAttribute('aria-pressed', String(nextState === 'open'));
+function recordWindowAction(view, action) {
+  void api('/api/activity', { method: 'POST', body: JSON.stringify({ view, action }) }).catch(() => {});
+}
+
+function renderWindowSwitchers() {
+  const focusedView = document.activeElement?.dataset?.windowView;
+  const focusedContainer = document.activeElement?.parentElement?.id;
+  for (const [selector, className] of [['#taskbar-windows', 'taskbar-app'], ['#dock-windows', 'dock-app']]) {
+    const container = $(selector);
+    container.replaceChildren();
+    for (const [view, entry] of state.windows) {
+      const definition = appDefinitions[view];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      button.classList.toggle('active', entry.status === 'open' && state.view === view);
+      button.classList.toggle('running', true);
+      button.dataset.windowView = view;
+      button.setAttribute('aria-pressed', String(entry.status === 'open' && state.view === view));
+      button.setAttribute('aria-label', `${entry.status === 'minimized' ? '還原' : '切換至'}${definition.name}視窗`);
+      button.title = `${definition.name}${entry.status === 'minimized' ? '（已最小化）' : ''}`;
+      button.textContent = definition.icon;
+      if (className === 'dock-app') { const indicator = document.createElement('i'); indicator.setAttribute('aria-hidden', 'true'); button.append(indicator); }
+      button.addEventListener('click', () => focusWindow(view));
+      container.append(button);
+    }
+  }
+  if (focusedView && focusedContainer) $(`#${focusedContainer} [data-window-view="${focusedView}"]`)?.focus({ preventScroll: true });
+}
+
+function focusWindow(view, { record = true } = {}) {
+  const entry = state.windows.get(view);
+  if (!entry) return;
+  const wasMinimized = entry.status === 'minimized';
+  const isNew = entry.needsInitialLoad;
+  const previousView = state.view;
+  entry.status = 'open';
+  entry.element.hidden = false;
+  entry.z = ++state.windowZ;
+  entry.element.style.zIndex = String(entry.z);
+  for (const [otherView, other] of state.windows) other.element.classList.toggle('is-active', otherView === view);
+  state.view = view;
+  if (record && previousView !== view) recordWindowAction(view, isNew ? 'open' : wasMinimized ? 'restore' : 'focus');
+  renderWindowSwitchers();
+  if (entry.needsInitialLoad) {
+    entry.needsInitialLoad = false;
+    loadView(view);
+  } else if (wasMinimized && (view === 'system' || view === 'duplicates')) {
+    loadView(view);
+  }
+}
+
+function createAppWindow(view) {
+  const definition = appDefinitions[view];
+  const sourcePanel = $(`#view-${view}`);
+  if (!definition || !sourcePanel) return null;
+  const element = document.importNode($('#app-window-template').content.firstElementChild, true);
+  if (view === 'files') element.classList.add('file-manager-window');
+  const titlebar = element.querySelector('.window-titlebar');
+  element.setAttribute('aria-label', `${definition.name}視窗`);
+  titlebar.setAttribute('aria-label', `${definition.name}視窗標題列。可拖曳移動，雙擊可最大化；聚焦後可用方向鍵移動，按 Enter 最大化或還原。`);
+  element.querySelector('[data-window-icon]').textContent = definition.icon;
+  element.querySelector('[data-window-title]').textContent = definition.name;
+  const content = element.querySelector('[data-window-content]');
+  sourcePanel.hidden = false;
+  content.append(sourcePanel);
+
+  const desktop = $('#desktop-area').getBoundingClientRect();
+  const offset = (state.windows.size % 7) * 26;
+  const left = Math.max(12, Math.min(desktop.width * 0.17 + offset, desktop.width - Math.min(390, desktop.width * 0.55)));
+  const top = Math.max(14, Math.min(desktop.height * 0.07 + offset, desktop.height - 170));
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+  $('#window-layer').append(element);
+  const entry = { view, element, panel: sourcePanel, status: 'open', z: ++state.windowZ, maximized: false, restoreRect: null, needsInitialLoad: true };
+  element.style.zIndex = String(entry.z);
+  state.windows.set(view, entry);
+  initializeWindowInteractions(entry);
+  renderWindowSwitchers();
+  return entry;
 }
 
 function launchView(view) {
   closeLauncherMenu();
-  showView(view);
-  setWindowState('open');
+  const definition = appDefinitions[view];
+  if (!definition) return;
+  if (definition.adminOnly && state.user?.role !== 'admin') { notify('這項功能僅供管理員使用。', true); return; }
+  const isNew = !state.windows.has(view);
+  if (isNew) createAppWindow(view);
+  focusWindow(view);
+  if (isNew) state.windows.get(view)?.element.querySelector('.window-titlebar').focus();
 }
+
+function showView(view) { launchView(view); }
 
 function updateDesktopClock() {
   const clock = $('#desktop-clock');
@@ -230,55 +290,101 @@ function toggleLauncherMenu(force) {
 
 function closeLauncherMenu() { toggleLauncherMenu(false); }
 
-function toggleWindowMaximized() {
-  const windowElement = $('#app-window');
-  if (!state.windowMaximized) {
-    state.windowRestoreRect = {
-      left: windowElement.style.left,
-      top: windowElement.style.top,
-      width: windowElement.style.width,
-      height: windowElement.style.height,
-    };
-    state.windowMaximized = true;
-    windowElement.classList.add('is-maximized');
-    $('#window-maximize').textContent = '▢';
-    $('#window-maximize').setAttribute('aria-label', '還原視窗');
-    $('#window-maximize').title = '還原';
+function toggleWindowMaximized(entry) {
+  const { element } = entry;
+  const button = element.querySelector('[data-window-action="maximize"]');
+  if (!entry.maximized) {
+    entry.restoreRect = { left: element.style.left, top: element.style.top, width: element.style.width, height: element.style.height };
+    entry.maximized = true;
+    element.classList.add('is-maximized');
+    button.textContent = '▢'; button.setAttribute('aria-label', '還原視窗'); button.title = '還原';
+    recordWindowAction(entry.view, 'maximize');
   } else {
-    state.windowMaximized = false;
-    windowElement.classList.remove('is-maximized');
-    const rect = state.windowRestoreRect || {};
-    for (const key of ['left', 'top', 'width', 'height']) windowElement.style[key] = rect[key] || '';
-    $('#window-maximize').textContent = '□';
-    $('#window-maximize').setAttribute('aria-label', '最大化視窗');
-    $('#window-maximize').title = '最大化';
+    entry.maximized = false;
+    element.classList.remove('is-maximized');
+    for (const key of ['left', 'top', 'width', 'height']) element.style[key] = entry.restoreRect?.[key] || '';
+    button.textContent = '□'; button.setAttribute('aria-label', '最大化視窗'); button.title = '最大化';
+    recordWindowAction(entry.view, 'restore');
   }
 }
 
-function initializeDesktopInteractions() {
-  document.querySelectorAll('[data-open-view]').forEach((button) => button.addEventListener('click', () => launchView(button.dataset.openView)));
-  document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
-  $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
-  $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
-  $('#desktop-account').addEventListener('click', () => toggleLauncherMenu());
-  $('#logout-menu-button').addEventListener('click', () => $('#logout-button').click());
-  $('#dock-app').addEventListener('click', () => {
-    if (state.windowState === 'open') showView(state.view);
-    else setWindowState('open');
-  });
-  document.querySelectorAll('[data-window-action]').forEach((button) => button.addEventListener('click', () => {
-    const action = button.dataset.windowAction;
-    if (action === 'minimize' || action === 'close') setWindowState(action === 'minimize' ? 'minimized' : 'closed');
-    if (action === 'maximize') toggleWindowMaximized();
-  }));
+function minimizeWindow(view) {
+  const entry = state.windows.get(view);
+  if (!entry) return;
+  entry.status = 'minimized'; entry.element.hidden = true; entry.element.classList.remove('is-active');
+  recordWindowAction(view, 'minimize');
+  if (state.view === view) {
+    const next = [...state.windows.values()].filter((candidate) => candidate.status === 'open').sort((a, b) => b.z - a.z)[0];
+    if (next) { focusWindow(next.view); next.element.querySelector('.window-titlebar').focus(); }
+    else { state.view = null; renderWindowSwitchers(); $('#launcher-toggle').focus(); }
+  } else renderWindowSwitchers();
+}
 
-  const titlebar = $('#window-titlebar');
-  const windowElement = $('#app-window');
+function closeWindow(view) {
+  const entry = state.windows.get(view);
+  if (!entry) return;
+  recordWindowAction(view, 'close');
+  if (view === 'player') resetPlayer();
+  if (view === 'system') { clearTimeout(state.systemRefreshTimer); state.systemRefreshTimer = null; }
+  if (view === 'duplicates') {
+    clearTimeout(state.duplicatePollTimer);
+    if ($('#duplicate-cleanup-dialog').open) $('#duplicate-cleanup-dialog').close();
+    if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
+      const query = new URLSearchParams({ scanId: state.duplicateScanId });
+      void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+      state.duplicateScanStatus = 'cancelling';
+      $('#duplicate-scan-progress').hidden = true;
+      $('#duplicate-scan-cancel').hidden = true;
+      $('#duplicate-scan-start').disabled = false;
+      $('#duplicates-share-select').disabled = false;
+      setDuplicateMessage('視窗關閉時已送出取消掃描要求；重新開啟視窗會確認掃描已停止。');
+    }
+  }
+  if ($('#photo-dialog').open && view === 'album') $('#photo-dialog').close();
+  entry.panel.hidden = true;
+  $('#window-content-bank').append(entry.panel);
+  entry.element.remove();
+  state.windows.delete(view);
+  if (state.view === view) {
+    const next = [...state.windows.values()].filter((candidate) => candidate.status === 'open').sort((a, b) => b.z - a.z)[0];
+    if (next) { focusWindow(next.view, { record: true }); next.element.querySelector('.window-titlebar').focus(); }
+    else { state.view = null; renderWindowSwitchers(); $('#launcher-toggle').focus(); }
+  }
+  renderWindowSwitchers();
+}
+
+function closeAllWindows() {
+  if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
+    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+    state.duplicateScanId = ''; state.duplicateScanStatus = 'cancelled';
+  }
+  clearTimeout(state.duplicatePollTimer); clearTimeout(state.systemRefreshTimer); clearInterval(state.desktopClockTimer);
+  resetPlayer();
+  if ($('#photo-dialog').open) $('#photo-dialog').close();
+  for (const selector of ['#duplicate-cleanup-dialog', '#change-password-dialog', '#clear-audit-dialog']) {
+    const dialog = $(selector); if (dialog.open) dialog.close();
+  }
+  for (const entry of state.windows.values()) { entry.panel.hidden = true; $('#window-content-bank').append(entry.panel); entry.element.remove(); }
+  state.windows.clear(); state.view = null; state.systemRefreshTimer = null;
+  renderWindowSwitchers();
+}
+
+function initializeWindowInteractions(entry) {
+  const { view, element } = entry;
+  const titlebar = element.querySelector('.window-titlebar');
   let drag = null;
+  element.addEventListener('pointerdown', () => { if (state.view !== view) focusWindow(view); });
+  element.querySelectorAll('[data-window-action]').forEach((button) => button.addEventListener('click', () => {
+    const action = button.dataset.windowAction;
+    if (action === 'minimize') minimizeWindow(view);
+    if (action === 'maximize') toggleWindowMaximized(entry);
+    if (action === 'close') closeWindow(view);
+  }));
   titlebar.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || event.target.closest('button') || state.windowMaximized) return;
-    const rect = windowElement.getBoundingClientRect();
-    const area = $('#desktop-area').getBoundingClientRect();
+    focusWindow(view);
+    if (event.button !== 0 || event.target.closest('button') || entry.maximized) return;
+    const rect = element.getBoundingClientRect(); const area = $('#desktop-area').getBoundingClientRect();
     drag = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, area, started: false };
     titlebar.setPointerCapture(event.pointerId);
   });
@@ -286,38 +392,41 @@ function initializeDesktopInteractions() {
     if (!drag || drag.pointerId !== event.pointerId) return;
     if (!drag.started && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
     drag.started = true;
-    const area = drag.area;
-    const width = windowElement.offsetWidth;
-    const height = windowElement.offsetHeight;
-    const left = Math.max(0, Math.min(area.width - Math.min(width, 180), event.clientX - area.left - drag.offsetX));
-    const top = Math.max(0, Math.min(area.height - 44, event.clientY - area.top - drag.offsetY));
-    windowElement.style.left = `${left}px`;
-    windowElement.style.top = `${top}px`;
+    const left = Math.max(0, Math.min(drag.area.width - Math.min(element.offsetWidth, 180), event.clientX - drag.area.left - drag.offsetX));
+    const top = Math.max(0, Math.min(drag.area.height - 44, event.clientY - drag.area.top - drag.offsetY));
+    element.style.left = `${left}px`; element.style.top = `${top}px`;
   });
   const stopDrag = (event) => {
-    if (drag?.pointerId === event.pointerId) drag = null;
+    if (drag?.pointerId !== event.pointerId) return;
+    if (drag.started) recordWindowAction(view, 'move');
+    drag = null;
   };
-  titlebar.addEventListener('pointerup', stopDrag);
-  titlebar.addEventListener('pointercancel', stopDrag);
-  titlebar.addEventListener('dblclick', (event) => { if (!event.target.closest('button')) toggleWindowMaximized(); });
+  titlebar.addEventListener('pointerup', stopDrag); titlebar.addEventListener('pointercancel', stopDrag);
+  titlebar.addEventListener('dblclick', (event) => { if (!event.target.closest('button')) toggleWindowMaximized(entry); });
   titlebar.addEventListener('keydown', (event) => {
     if (event.target !== titlebar) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggleWindowMaximized();
-      return;
-    }
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleWindowMaximized(entry); return; }
     const movement = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }[event.key];
-    if (!movement || state.windowMaximized) return;
+    if (!movement || entry.maximized) return;
     event.preventDefault();
-    const area = $('#desktop-area').getBoundingClientRect();
-    const rect = windowElement.getBoundingClientRect();
-    const nextLeft = Math.max(0, Math.min(area.width - Math.min(rect.width, 180), rect.left - area.left + movement[0]));
-    const nextTop = Math.max(0, Math.min(area.height - 44, rect.top - area.top + movement[1]));
-    windowElement.style.left = `${nextLeft}px`;
-    windowElement.style.top = `${nextTop}px`;
+    const area = $('#desktop-area').getBoundingClientRect(); const rect = element.getBoundingClientRect();
+    element.style.left = `${Math.max(0, Math.min(area.width - Math.min(rect.width, 180), rect.left - area.left + movement[0]))}px`;
+    element.style.top = `${Math.max(0, Math.min(area.height - 44, rect.top - area.top + movement[1]))}px`;
+    recordWindowAction(view, 'move');
   });
+}
 
+function initializeDesktopInteractions() {
+  document.querySelectorAll('[data-open-view]').forEach((button) => button.addEventListener('click', () => launchView(button.dataset.openView)));
+  document.querySelectorAll('[data-file-category]').forEach((button) => button.addEventListener('click', () => setFileCategory(button.dataset.fileCategory)));
+  $('[data-file-location="root"]').addEventListener('click', () => {
+    state.path = ''; state.fileCategory = 'all'; state.fileSearch = ''; state.selectedItems.clear(); $('#file-search').value = '';
+    syncFileManagerNavigation(); loadFiles();
+  });
+  $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
+  $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
+  $('#desktop-account').addEventListener('click', () => toggleLauncherMenu());
+  $('#logout-menu-button').addEventListener('click', () => $('#logout-button').click());
   $('#desktop-area').addEventListener('pointerdown', (event) => {
     if (event.target === event.currentTarget) closeLauncherMenu();
   });
@@ -345,11 +454,35 @@ function navigateFiles(nextPath) {
   loadFiles();
 }
 
+function setFileCategory(category) {
+  if (!fileCategoryLabels[category]) return;
+  state.fileCategory = category;
+  state.selectedItems.clear();
+  syncFileManagerNavigation();
+  loadFiles();
+}
+
+function syncFileManagerNavigation() {
+  for (const button of document.querySelectorAll('[data-file-category]')) {
+    const active = button.dataset.fileCategory === state.fileCategory;
+    button.setAttribute('aria-pressed', String(active));
+    button.classList.toggle('active', active);
+  }
+  const rootButton = $('[data-file-location="root"]');
+  rootButton?.classList.toggle('active', state.fileCategory === 'all' && !state.path);
+  if (rootButton) {
+    if (state.fileCategory === 'all' && !state.path) rootButton.setAttribute('aria-current', 'page');
+    else rootButton.removeAttribute('aria-current');
+  }
+  $('#file-view-title').textContent = state.fileCategory === 'all' ? (state.path ? state.path.split('/').at(-1) : '我的檔案') : fileCategoryLabels[state.fileCategory];
+}
+
 function updateBatchToolbar() {
   const count = state.selectedItems.size;
   $('#selected-file-count').textContent = count ? `已選取 ${count} 個項目` : '尚未選取項目';
   for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = !state.canWrite || count === 0;
   const selectAll = $('#select-all-files');
+  selectAll.setAttribute('aria-label', state.fileCategory === 'all' && !state.fileSearch ? '選取目前資料夾的所有項目' : '選取目前顯示的所有項目');
   const selectedVisible = state.currentItems.filter((item) => state.selectedItems.has(item.name)).length;
   selectAll.checked = state.currentItems.length > 0 && selectedVisible === state.currentItems.length;
   selectAll.indeterminate = selectedVisible > 0 && selectedVisible < state.currentItems.length;
@@ -357,18 +490,22 @@ function updateBatchToolbar() {
 }
 
 async function loadFiles() {
+  syncFileManagerNavigation();
   if (!state.shareId) { state.currentItems = []; state.canWrite = false; $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return; }
   try {
     const query = new URLSearchParams({ shareId: state.shareId, path: state.path });
     const { items, canWrite } = await api(`/api/files?${query}`);
-    state.currentItems = items;
+    const visibleItems = filterAndSortFiles(items, { category: state.fileCategory, search: state.fileSearch, sort: state.fileSort });
+    state.currentItems = visibleItems;
     state.canWrite = canWrite;
     for (const selected of [...state.selectedItems]) if (!items.some((item) => item.name === selected)) state.selectedItems.delete(selected);
     renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles);
     const body = $('#file-list'); body.replaceChildren();
-    $('#empty-files').hidden = items.length !== 0;
+    $('#empty-files').hidden = visibleItems.length !== 0;
+    $('#empty-files strong').textContent = items.length === 0 ? '這裡還沒有檔案' : '沒有符合條件的檔案';
+    $('#empty-files span').textContent = items.length === 0 ? '可以匯入檔案，或先新增資料夾。' : '請調整搜尋文字或檔案分類；目前只搜尋這個資料夾。';
     $('#new-folder').disabled = !canWrite; $('#file-input').disabled = !canWrite;
-    for (const item of items) {
+    for (const item of visibleItems) {
       const row = document.createElement('tr');
       const selectCell = document.createElement('td'); selectCell.className = 'file-select-column';
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selectedItems.has(item.name); checkbox.disabled = !canWrite; checkbox.setAttribute('aria-label', `選取${item.name}`);
@@ -647,7 +784,7 @@ async function startDuplicateScan() {
   showDuplicateProgress({ phase: 'starting' });
   try {
     const result = await api('/api/duplicates/scan', { method: 'POST', body: JSON.stringify({ shareId: share.id }) });
-    if (selectedDuplicateShare()?.id !== share.id) {
+    if (selectedDuplicateShare()?.id !== share.id || !state.windows.has('duplicates')) {
       const query = new URLSearchParams({ scanId: result.scanId });
       void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
       return;
@@ -667,16 +804,18 @@ async function startDuplicateScan() {
 
 async function pollDuplicateScan() {
   if (!state.duplicateScanId) return;
+  const scanId = state.duplicateScanId;
   try {
-    const query = new URLSearchParams({ scanId: state.duplicateScanId });
+    const query = new URLSearchParams({ scanId });
     const result = await api(`/api/duplicates/scan?${query}`);
+    if (state.duplicateScanId !== scanId) return;
     state.duplicateScanStatus = result.status;
     if (['scanning', 'cancelling'].includes(result.status)) {
       showDuplicateProgress(result.progress);
       $('#duplicate-scan-start').disabled = true;
       $('#duplicates-share-select').disabled = true;
       $('#duplicate-scan-cancel').hidden = result.status === 'cancelling';
-      if (state.view === 'duplicates') scheduleDuplicatePoll();
+      if (state.windows.has('duplicates')) scheduleDuplicatePoll();
       return;
     }
     clearTimeout(state.duplicatePollTimer);
@@ -1216,6 +1355,8 @@ function makeSystemMeter(label, percent, text) {
 }
 
 async function loadSystem() {
+  clearTimeout(state.systemRefreshTimer);
+  state.systemRefreshTimer = null;
   try {
     const info = await api('/api/system');
     const container = $('#system-information'); container.replaceChildren();
@@ -1269,7 +1410,7 @@ async function loadSystem() {
     if (!info.networkInterfaces.length) interfaces.textContent = '目前沒有啟用中的網路介面。';
     network.append(interfaces);
     container.append(device, execution, memory, cpu, storage, network);
-    if (state.view === 'system') state.systemRefreshTimer = setTimeout(loadSystem, 5000);
+    if (state.windows.get('system')?.status === 'open') state.systemRefreshTimer = setTimeout(loadSystem, 5000);
   } catch (error) {
     const container = $('#system-information'); container.replaceChildren();
     const message = document.createElement('p'); message.className = 'system-error'; message.textContent = error.message;
@@ -1287,8 +1428,9 @@ $('#logout-button').addEventListener('click', async () => {
   if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
     const query = new URLSearchParams({ scanId: state.duplicateScanId });
     await api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
+    state.duplicateScanId = ''; state.duplicateScanStatus = 'cancelled';
   }
-  await api('/api/logout', { method: 'POST' }); resetPlayer(); state.user = null; state.path = ''; showAuth(false);
+  await api('/api/logout', { method: 'POST' }); closeAllWindows(); state.user = null; state.path = ''; showAuth(false);
 });
 $('#change-password-button').addEventListener('click', () => {
   const form = $('#change-password-form'); form.reset();
@@ -1314,6 +1456,11 @@ for (const selector of ['#share-select', '#trash-share-select', '#album-share-se
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
 $('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
+$('#file-search').addEventListener('input', () => {
+  clearTimeout(state.fileSearchTimer);
+  state.fileSearchTimer = setTimeout(() => { state.fileSearch = $('#file-search').value; state.selectedItems.clear(); loadFiles(); }, 180);
+});
+$('#file-sort').addEventListener('change', (event) => { state.fileSort = event.currentTarget.value; loadFiles(); });
 $('#select-all-files').addEventListener('change', (event) => {
   if (event.target.checked) for (const item of state.currentItems) state.selectedItems.add(item.name);
   else for (const item of state.currentItems) state.selectedItems.delete(item.name);

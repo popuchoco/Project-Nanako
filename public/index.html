@@ -29,8 +29,7 @@
       <div class="system-bar-start">
         <button id="launcher-toggle" class="system-bar-button launcher-trigger" type="button" aria-label="開啟應用程式選單" aria-expanded="false" aria-controls="launcher-menu"><span class="nanako-mark" aria-hidden="true">N</span><span class="system-bar-label">Nanako</span></button>
         <span class="system-bar-divider" aria-hidden="true"></span>
-        <button class="taskbar-app active" data-open-view="files" type="button" aria-label="切換至檔案管理" title="檔案管理"><span class="taskbar-folder" aria-hidden="true"></span></button>
-        <button class="taskbar-app admin-only" data-open-view="system" type="button" aria-label="切換至電腦資訊" title="電腦資訊"><span aria-hidden="true">⚙</span></button>
+        <div id="taskbar-windows" class="taskbar-windows" aria-label="開啟中的應用程式"></div>
       </div>
       <div class="system-bar-end">
         <span class="system-local-status"><i class="status-dot" aria-hidden="true"></i><span>本機</span></span>
@@ -50,45 +49,48 @@
         <button class="desktop-icon" data-open-view="duplicates" type="button"><span class="desktop-icon-art duplicate-art" aria-hidden="true">⧉</span><span>檔案去重</span></button>
       </div>
 
-      <section id="app-window" class="app-window" role="region" aria-labelledby="window-title" aria-label="Nanako 應用程式視窗">
-        <header id="window-titlebar" class="window-titlebar" tabindex="0" aria-label="Nanako 視窗標題列。可拖曳移動，雙擊可最大化；聚焦後可用方向鍵移動，按 Enter 最大化或還原。">
-          <div class="window-app-title"><span id="window-app-icon" class="window-title-icon" aria-hidden="true">▤</span><span id="window-title">檔案管理</span></div>
-          <div class="window-controls" aria-label="視窗控制">
-            <button class="window-control" data-window-action="minimize" type="button" aria-label="最小化視窗" title="最小化">−</button>
-            <button id="window-maximize" class="window-control" data-window-action="maximize" type="button" aria-label="最大化視窗" title="最大化">□</button>
-            <button class="window-control window-close" data-window-action="close" type="button" aria-label="關閉視窗" title="關閉">×</button>
-          </div>
-        </header>
-        <div class="window-app-body">
-    <aside class="sidebar">
-      <div class="sidebar-label">應用程式</div>
-      <nav aria-label="應用程式導覽">
-        <button class="nav-item active" data-view="files"><span class="nav-glyph" aria-hidden="true">▤</span>檔案管理</button>
-        <button class="nav-item" data-view="duplicates"><span class="nav-glyph" aria-hidden="true">⧉</span>檔案去重</button>
-        <button class="nav-item" data-view="album"><span class="nav-glyph" aria-hidden="true">▧</span>相簿</button>
-        <button class="nav-item" data-view="player"><span class="nav-glyph" aria-hidden="true">▶</span>播放器</button>
-        <button class="nav-item" data-view="trash"><span class="nav-glyph" aria-hidden="true">⌫</span>資源回收桶</button>
-        <button class="nav-item admin-only" data-view="users"><span class="nav-glyph" aria-hidden="true">♙</span>使用者與權限</button>
-        <button class="nav-item" data-view="computer"><span class="nav-glyph" aria-hidden="true">▣</span>儲存空間</button>
-        <button class="nav-item admin-only" data-view="system"><span class="nav-glyph" aria-hidden="true">▦</span>電腦資訊</button>
-        <button class="nav-item admin-only" data-view="settings"><span class="nav-glyph" aria-hidden="true">⚙</span>系統設定與紀錄</button>
-        <button class="nav-item" data-view="network"><span class="nav-glyph" aria-hidden="true">⌁</span>網路狀態</button>
-      </nav>
-      <div class="sidebar-bottom"><div class="local-badge"><span class="status-dot"></span><span>僅本機連線</span></div><span class="build-label">Nanako 桌面版 0.2</span></div>
-    </aside>
+      <div id="window-layer" class="window-layer" aria-label="Nanako 應用程式視窗"></div>
+      <template id="app-window-template">
+        <section class="app-window" role="region">
+          <header class="window-titlebar" tabindex="0" aria-label="Nanako 視窗標題列。可拖曳移動，雙擊可最大化；聚焦後可用方向鍵移動，按 Enter 最大化或還原。">
+            <div class="window-app-title"><span class="window-title-icon" data-window-icon aria-hidden="true"></span><span data-window-title></span></div>
+            <div class="window-controls" aria-label="視窗控制">
+              <button class="window-control" data-window-action="minimize" type="button" aria-label="最小化視窗" title="最小化">−</button>
+              <button class="window-control" data-window-action="maximize" type="button" aria-label="最大化視窗" title="最大化">□</button>
+              <button class="window-control window-close" data-window-action="close" type="button" aria-label="關閉視窗" title="關閉">×</button>
+            </div>
+          </header>
+          <div class="window-app-body"><section class="workspace" data-window-content></section></div>
+        </section>
+      </template>
+      <div id="window-content-bank" hidden>
 
-    <section class="workspace">
-      <header class="topbar">
-        <div><p class="eyebrow">本機優先儲存空間</p><h1 id="page-title">檔案管理</h1></div>
-        <div class="account-tools"><button id="change-password-button" class="button ghost" type="button">變更密碼</button><button id="logout-button" class="button ghost" type="button">登出</button></div>
-      </header>
-
-      <section id="view-files" class="view-panel">
-        <div class="content-heading"><div><h2>檔案</h2><p class="muted">檔案只能存放與管理於 Nanako 可攜式資料目錄；其他磁碟與 Windows 個人資料夾不會列入。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">匯入檔案<input id="file-input" type="file" multiple hidden></label></div></div>
-        <div class="file-controls"><label class="field-inline">資料空間<select id="share-select" aria-label="選擇資料空間"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div></div>
+      <section id="view-files" class="view-panel file-manager-view">
+        <aside class="file-manager-sidebar" aria-label="檔案管理導覽">
+          <section class="file-nav-group">
+            <h3>檔案位置</h3>
+            <button class="file-nav-item active" data-file-location="root" type="button" aria-current="page"><span aria-hidden="true">⌂</span>我的檔案</button>
+          </section>
+          <section class="file-nav-group">
+            <h3>分類檔案 <small>目前資料夾</small></h3>
+            <button class="file-nav-item" data-file-category="image" type="button" aria-pressed="false"><span aria-hidden="true">▧</span>圖片</button>
+            <button class="file-nav-item" data-file-category="video" type="button" aria-pressed="false"><span aria-hidden="true">▶</span>影片</button>
+            <button class="file-nav-item" data-file-category="audio" type="button" aria-pressed="false"><span aria-hidden="true">♫</span>音訊</button>
+            <button class="file-nav-item" data-file-category="document" type="button" aria-pressed="false"><span aria-hidden="true">▤</span>文件</button>
+          </section>
+          <section class="file-nav-group">
+            <h3>檔案工具</h3>
+            <button class="file-nav-item" data-open-view="duplicates" type="button"><span aria-hidden="true">⧉</span>檔案去重</button>
+            <button class="file-nav-item" data-open-view="trash" type="button"><span aria-hidden="true">⌫</span>資源回收桶</button>
+          </section>
+        </aside>
+        <div class="file-manager-content">
+        <div class="content-heading"><div><h2 id="file-view-title">我的檔案</h2><p id="file-scope-note" class="muted">資料只儲存在 NanakoData；分類與搜尋範圍是目前資料夾，不會瀏覽其他磁碟或 Windows 個人資料夾。</p></div><div class="toolbar"><button id="new-folder" class="button secondary" type="button">新增資料夾</button><label class="button primary upload-button">匯入檔案<input id="file-input" type="file" multiple hidden></label></div></div>
+        <div class="file-controls"><label class="field-inline">資料空間<select id="share-select" aria-label="選擇 Nanako 資料空間"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div><label class="file-search"><span class="sr-only">搜尋目前資料夾中的檔案名稱</span><input id="file-search" type="search" placeholder="搜尋目前資料夾" aria-label="搜尋目前資料夾中的檔案名稱"></label><label class="file-sort"><span class="sr-only">排序檔案</span><select id="file-sort" aria-label="排序檔案"><option value="name-asc">名稱 A 到 Z</option><option value="name-desc">名稱 Z 到 A</option><option value="modified-desc">最近修改</option><option value="modified-asc">最早修改</option><option value="size-desc">大小由大到小</option><option value="size-asc">大小由小到大</option></select></label></div>
         <div class="file-batch-toolbar" aria-label="批次檔案操作"><span id="selected-file-count" aria-live="polite">尚未選取項目</span><div class="toolbar"><button id="batch-move" class="button secondary" type="button" disabled>批次移動</button><button id="batch-copy" class="button secondary" type="button" disabled>批次複製</button><button id="batch-delete" class="button secondary danger-outline" type="button" disabled>批次移至回收桶</button></div></div>
         <div class="table-wrap"><table><thead><tr><th scope="col" class="file-select-column"><input id="select-all-files" type="checkbox" aria-label="選取目前資料夾的所有項目"></th><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
         <p id="file-message" class="inline-message" role="status" hidden></p>
+        </div>
       </section>
 
       <section id="view-duplicates" class="view-panel" hidden>
@@ -198,13 +200,10 @@
           <p id="smb-preflight-message" class="inline-message" role="status" hidden></p>
         </section>
       </section>
-      <footer class="footer-note">資料儲存在本機。沒有 SSO、雲端同步或遙測。</footer>
-    </section>
-        </div>
-      </section>
+      </div>
 
       <section id="launcher-menu" class="launcher-menu" aria-label="應用程式選單" hidden>
-        <div class="launcher-heading"><span class="nanako-mark" aria-hidden="true">N</span><div><strong>Nanako 應用程式</strong><small>本機檔案空間</small></div><button id="logout-menu-button" class="button ghost" type="button">登出</button></div>
+        <div class="launcher-heading"><span class="nanako-mark" aria-hidden="true">N</span><div><strong>Nanako 應用程式</strong><small>本機檔案空間</small></div><button id="change-password-button" class="button ghost" type="button">變更密碼</button><button id="logout-button" class="button ghost" type="button">登出</button></div>
         <div class="launcher-grid">
           <button data-open-view="files" type="button"><span class="launcher-icon folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
           <button data-open-view="album" type="button"><span class="launcher-icon album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>
@@ -212,14 +211,16 @@
           <button data-open-view="duplicates" type="button"><span class="launcher-icon duplicate-art" aria-hidden="true">⧉</span>檔案去重</button>
           <button data-open-view="trash" type="button"><span class="launcher-icon trash-art" aria-hidden="true">▤</span>資源回收桶</button>
           <button data-open-view="computer" type="button"><span class="launcher-icon computer-art" aria-hidden="true"><span></span></span>儲存空間</button>
+          <button class="admin-only" data-open-view="users" type="button"><span class="launcher-icon settings-art" aria-hidden="true">♙</span>使用者與權限</button>
           <button class="admin-only" data-open-view="settings" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⚙</span>系統設定</button>
           <button class="admin-only" data-open-view="system" type="button"><span class="launcher-icon computer-art" aria-hidden="true">▦</span>電腦資訊</button>
+          <button data-open-view="network" type="button"><span class="launcher-icon settings-art" aria-hidden="true">⌁</span>網路狀態</button>
         </div>
         <div class="launcher-footer"><span><i class="status-dot" aria-hidden="true"></i>本機服務運作中</span><span>資料僅存於 NanakoData</span></div>
       </section>
 
-      <footer class="desktop-dock" aria-label="已開啟的應用程式">
-        <button id="dock-app" class="dock-app active running" data-restore-window type="button" aria-label="顯示檔案管理視窗" title="檔案管理"><span class="taskbar-folder" aria-hidden="true"></span><i></i></button>
+      <footer class="desktop-dock" aria-label="工作列與應用程式捷徑">
+        <div id="dock-windows" class="dock-windows" aria-label="已開啟的應用程式"></div>
         <span class="dock-separator" aria-hidden="true"></span>
         <button id="dock-launcher" class="dock-launcher" type="button" aria-label="開啟應用程式選單" title="應用程式選單"><span aria-hidden="true">⠿</span></button>
       </footer>

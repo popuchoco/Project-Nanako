@@ -33,7 +33,7 @@ const MAX_DUPLICATE_CLEANUP_ITEMS = 1000;
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
-  ['.js', 'text/javascript; charset=utf-8'], ['.svg', 'image/svg+xml'],
+  ['.js', 'text/javascript; charset=utf-8'], ['.mjs', 'text/javascript; charset=utf-8'], ['.svg', 'image/svg+xml'],
 ]);
 const mediaTypes = new Map([
   ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'],
@@ -690,8 +690,14 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
             files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶',
             duplicates: '檔案去重', users: '使用者與權限', computer: '儲存空間', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態',
           };
-          if (!views[body.view] || (['users', 'system', 'settings'].includes(body.view) && user.role !== 'admin')) throw fail(400, 'invalid_activity', '操作紀錄類型不正確。');
-          setAudit(user, '開啟畫面', views[body.view]);
+          const actionLabels = {
+            open: '開啟畫面', focus: '切換作用中視窗', minimize: '最小化視窗',
+            maximize: '最大化視窗', restore: '還原視窗', close: '關閉視窗', move: '移動視窗',
+          };
+          const action = body.action || 'open';
+          if (!views[body.view] || !actionLabels[action] || (['users', 'system', 'settings'].includes(body.view) && user.role !== 'admin')) throw fail(400, 'invalid_activity', '操作紀錄類型不正確。');
+          const detail = action === 'open' ? views[body.view] : `${views[body.view]}視窗`;
+          setAudit(user, actionLabels[action], detail);
           return json(res, 200, { ok: true });
         }
 

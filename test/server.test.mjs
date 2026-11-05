@@ -29,6 +29,14 @@ async function setupServer(t, options = {}) {
   return { base, dataDir, request, setup };
 }
 
+test('renderer ES modules are served with a JavaScript MIME type', async (t) => {
+  const { request } = await setupServer(t);
+  const moduleFile = await request('/file-listing.mjs');
+  assert.equal(moduleFile.response.status, 200);
+  assert.match(moduleFile.response.headers.get('content-type'), /^text\/javascript\b/u);
+  assert.match(moduleFile.body, /filterAndSortFiles/u);
+});
+
 test('setup, login, file transfer, recycle bin and restore work locally', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();
@@ -348,10 +356,19 @@ test('operation history supports retention settings, automatic pruning and defen
   assert.deepEqual(defaults.body.options, [1, 3, 7, 30, 90, 180, 365]);
 
   await request('/api/activity', { method: 'POST', headers: auth, body: JSON.stringify({ view: 'album' }) });
+  for (const action of ['focus', 'minimize', 'maximize', 'restore', 'move', 'close']) {
+    const recorded = await request('/api/activity', { method: 'POST', headers: auth, body: JSON.stringify({ view: 'files', action }) });
+    assert.equal(recorded.response.status, 200);
+  }
+  const invalidActivity = await request('/api/activity', { method: 'POST', headers: auth, body: JSON.stringify({ view: 'files', action: 'purge-everything' }) });
+  assert.equal(invalidActivity.response.status, 400);
   await request('/api/folders', { method: 'POST', headers: auth, body: JSON.stringify({ shareId, path: '', name: '紀錄測試' }) });
   const history = await request('/api/audit-logs', { headers: { Cookie: cookie } });
   assert.equal(history.response.status, 200);
   assert.ok(history.body.logs.some((item) => item.action === '開啟畫面' && item.target === '相簿'));
+  for (const action of ['切換作用中視窗', '最小化視窗', '最大化視窗', '還原視窗', '移動視窗', '關閉視窗']) {
+    assert.ok(history.body.logs.some((item) => item.action === action && item.target === '檔案管理視窗'));
+  }
   assert.ok(history.body.logs.some((item) => item.action === '建立資料夾' && item.target === '紀錄測試'));
   assert.equal(JSON.stringify(history.body).includes('local-test-passphrase'), false);
 

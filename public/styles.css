@@ -175,3 +175,46 @@
 .app-window .duplicate-group{padding:11px}
 .app-window .duplicate-cleanup-bar{bottom:-18px}
 @media(max-width:650px){.duplicate-scan-controls{align-items:stretch;flex-direction:column}.duplicate-scan-controls .field-inline{min-width:0;width:100%}.duplicate-scan-controls .toolbar{width:100%}.duplicate-cleanup-bar{align-items:stretch;flex-direction:column;margin-left:-12px;margin-right:-12px;padding:10px 12px}.duplicate-cleanup-bar .button{width:100%}.app-window .duplicate-cleanup-bar{bottom:-12px}}
+
+/* Nanako app windows: each application owns a workspace inside the simulated desktop. */
+.window-layer{position:absolute;inset:0;z-index:2;pointer-events:none}
+.window-layer>.app-window{pointer-events:auto}
+.window-app-body{display:block;height:calc(100% - 44px);min-height:0}
+.app-window .workspace{display:block;height:100%;min-height:0;overflow:auto;padding:20px 25px 18px;background:#fff}
+.app-window .view-panel{max-width:none;min-height:100%}
+.app-window.is-active{border-color:#c4dcec;box-shadow:0 26px 68px rgba(1,27,47,.34),0 0 0 1px rgba(255,255,255,.55)}
+.window-titlebar:focus-visible{outline:2px solid #1672dd;outline-offset:-3px;border-radius:10px}
+.taskbar-windows,.dock-windows{display:flex;align-items:center;gap:3px;max-width:min(46vw,520px);overflow-x:auto;scrollbar-width:thin}
+.taskbar-app{flex:none}
+.taskbar-app[aria-pressed="true"]{box-shadow:inset 0 -2px 0 #8ed2ff}
+.dock-windows .dock-app{flex:none}
+.dock-app[aria-pressed="true"]{background:rgba(255,255,255,.9);box-shadow:inset 0 0 0 1px rgba(68,123,158,.16)}
+.dock-app:not(.running)>i{opacity:0}
+.window-control{flex:none}
+@media(max-width:900px){.app-window .workspace{padding:17px 17px 14px}.app-window .sidebar{display:none}}
+@media(max-width:620px){.window-layer>.app-window{left:7px!important;top:48px!important;width:calc(100% - 14px)!important;height:calc(100% - 120px)!important;min-height:0}.window-layer>.app-window.is-maximized{left:5px!important;top:42px!important;width:calc(100% - 10px)!important;height:calc(100% - 105px)!important}.app-window .workspace{padding:14px 12px 12px}.app-window .content-heading{align-items:flex-start;flex-direction:column;gap:10px}.app-window .toolbar{width:100%}.app-window .toolbar .button{flex:1}.app-window .management-grid{grid-template-columns:1fr}.taskbar-windows{max-width:36vw}.taskbar-app{width:28px;min-width:28px;padding:0}.dock-windows{max-width:58vw}.desktop-dock{max-width:calc(100% - 16px);overflow-x:auto}}
+.app-window.file-manager-window .workspace{padding:0}
+.file-manager-view{display:grid;grid-template-columns:178px minmax(0,1fr);min-height:100%;margin:0;background:#fff}
+.file-manager-sidebar{min-width:0;display:flex;flex-direction:column;gap:18px;padding:18px 10px;background:#f0f3f8;border-right:1px solid #e4eaf0;color:#293b49}
+.file-nav-group{display:grid;gap:3px}
+.file-nav-group h3{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin:0 8px 5px;color:#7c8d9a;font-size:10px;font-weight:650;letter-spacing:.04em}
+.file-nav-group h3 small{font-size:9px;font-weight:400;letter-spacing:0;white-space:nowrap}
+.file-nav-item{display:flex;align-items:center;gap:9px;min-height:36px;width:100%;border:0;border-radius:6px;padding:7px 9px;background:transparent;color:#4d5e6b;text-align:left;font-size:11px}
+.file-nav-item>span{width:16px;flex:none;text-align:center;color:#8799a7;font-size:14px}
+.file-nav-item:hover{background:#e5edf4;color:#263b4b}
+.file-nav-item.active,.file-nav-item[aria-current="page"]{background:#fff;color:#1262bb;box-shadow:inset 2px 0 0 #1672dd}
+.file-nav-item.active>span,.file-nav-item[aria-current="page"]>span{color:#1672dd}
+.file-manager-content{min-width:0;padding:20px 24px}
+.file-manager-content .content-heading{align-items:center;margin-bottom:15px}
+.file-manager-content .content-heading h2{font-size:18px;color:#243746}
+.file-manager-content .content-heading .muted{max-width:690px;font-size:11px}
+.file-manager-content .file-controls{gap:9px 14px;flex-wrap:wrap;padding:11px 0}
+.file-search input,.file-sort select{height:34px;max-width:100%;border:1px solid #d5dfe6;border-radius:6px;background:#fff;color:#3f5261;padding:0 10px;font-size:11px}
+.file-search input{width:190px}
+.file-sort select{min-width:150px}
+.file-manager-content .file-batch-toolbar{min-height:42px;padding:6px 10px;font-size:10px}
+.file-manager-content .table-wrap{min-height:140px}
+.file-manager-content th{font-size:10px;padding:10px 11px}
+.file-manager-content td{font-size:11px;padding:10px 11px}
+@media(max-width:900px){.file-manager-view{grid-template-columns:150px minmax(0,1fr)}.file-manager-content{padding:16px}.file-manager-sidebar{padding:14px 8px}}
+@media(max-width:620px){.app-window.file-manager-window .workspace{padding:0}.file-manager-view{display:flex;flex-direction:column}.file-manager-sidebar{flex-direction:row;align-items:flex-start;gap:8px;padding:8px;overflow-x:auto;border-right:0;border-bottom:1px solid #e4eaf0}.file-nav-group{display:flex;align-items:center;gap:3px;flex:none}.file-nav-group h3{display:none}.file-nav-item{width:auto;min-height:34px;white-space:nowrap;padding:6px 8px}.file-nav-item>span{width:auto}.file-manager-content{padding:12px}.file-manager-content .file-controls{align-items:stretch;flex-direction:column}.file-manager-content .field-inline,.file-search,.file-sort{width:100%}.file-search input,.file-sort select{width:100%}}
