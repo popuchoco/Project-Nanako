@@ -84,6 +84,9 @@ test('file category search covers one Nanako share recursively and honours read 
   assert.equal(images.body.share.id, shareId);
   assert.ok(images.body.scannedEntries >= 4);
 
+  const media = await request(`/api/files/search?${new URLSearchParams({ shareId, category: 'media' })}`, { headers: { Cookie: cookie } });
+  assert.deepEqual(media.body.items.map((item) => item.path), ['相簿/旅行/海邊.mp4']);
+
   categoryQuery.set('search', '私人查詢字串');
   const noMatch = await request(`/api/files/search?${categoryQuery}`, { headers: { Cookie: cookie } });
   assert.deepEqual(noMatch.body.items, []);

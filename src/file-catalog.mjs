@@ -25,7 +25,7 @@ export async function searchManagedFiles({
   verifyPath = async () => {},
 } = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) throw new TypeError('資料空間根目錄必須是絕對路徑。');
-  if (!['image', 'video', 'audio', 'document'].includes(category)) throw catalogError(400, 'invalid_file_category', '檔案分類不正確。');
+  if (!['image', 'video', 'audio', 'document', 'media'].includes(category)) throw catalogError(400, 'invalid_file_category', '檔案分類不正確。');
   if (!Number.isInteger(maxEntries) || maxEntries < 1 || !Number.isInteger(maxResults) || maxResults < 1) throw new TypeError('檔案搜尋上限不正確。');
 
   const absoluteRoot = path.resolve(root);
@@ -90,7 +90,8 @@ export async function searchManagedFiles({
           pending.push({ directory: absolutePath, relativeDirectory: relativePath });
           continue;
         }
-        if (!info.isFile() || fileCategory(entry.name) !== category) continue;
+        const kind = fileCategory(entry.name);
+        if (!info.isFile() || (category === 'media' ? !['audio', 'video'].includes(kind) : kind !== category)) continue;
         if (query && !entry.name.toLocaleLowerCase('zh-TW').includes(query)) continue;
         if (items.length === maxResults) { truncated = true; break; }
         items.push({ name: entry.name, path: relativePath, isDirectory: false, size: info.size, modifiedAt: info.mtime.toISOString() });

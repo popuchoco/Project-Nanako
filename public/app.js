@@ -2,8 +2,9 @@ import { filterAndSortFiles, mediaKind } from './file-listing.mjs';
 
 const $ = (selector) => document.querySelector(selector);
 const state = {
-  user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', view: null,
-  currentItems: [], albumItems: [], albumImages: [], playerItems: [], pendingTrackPath: '',
+  user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', albumScopeAll: true, playerScopeAll: true,
+  albumSearch: '', playerSearch: '', albumLoadSequence: 0, playerLoadSequence: 0, albumSearchTimer: null, playerSearchTimer: null, view: null,
+  currentItems: [], fileRenderedCount: 0, albumItems: [], albumImages: [], albumRenderedCount: 0, playerItems: [], playerRenderedCount: 0, pendingTrackPath: '',
   activeTrackPath: '', photoItems: [], photoIndex: 0, photoShareId: '', photoPath: '', systemRefreshTimer: null,
   selectedItems: new Set(), canWrite: false, fileCategory: 'all', fileSearch: '', fileSort: 'name-asc', fileSearchTimer: null, fileLoadSequence: 0,
   duplicateScanId: '', duplicateScanStatus: '', duplicatePollTimer: null, duplicateGroups: [], duplicateKeepers: new Map(),
@@ -37,6 +38,10 @@ function mediaUrl(shareId, filePath) {
   return `/api/preview?${new URLSearchParams({ shareId, path: filePath })}`;
 }
 
+function mediaItemPath(item, folderPath = '') {
+  return item.path || (folderPath ? `${folderPath}/${item.name}` : item.name);
+}
+
 function syncShareSelectors() {
   for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
     const element = $(selector);
@@ -51,13 +56,16 @@ function selectShare(shareId) {
     void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
   }
   clearTimeout(state.duplicatePollTimer);
+  clearTimeout(state.albumSearchTimer); clearTimeout(state.playerSearchTimer);
   state.shareId = shareId;
-  state.path = ''; state.albumPath = ''; state.playerPath = '';
+  state.path = ''; state.albumPath = ''; state.playerPath = ''; state.albumScopeAll = true; state.playerScopeAll = true;
+  state.albumSearch = ''; state.playerSearch = ''; $('#album-search').value = ''; $('#player-search').value = '';
   state.fileCategory = 'all'; state.fileSearch = ''; $('#file-search').value = '';
   state.selectedItems.clear();
-  state.currentItems = []; state.albumItems = []; state.albumImages = []; state.playerItems = [];
+  state.currentItems = []; state.fileRenderedCount = 0; state.albumItems = []; state.albumImages = []; state.albumRenderedCount = 0; state.playerItems = []; state.playerRenderedCount = 0;
   state.pendingTrackPath = ''; state.activeTrackPath = '';
   state.duplicateScanId = ''; state.duplicateScanStatus = ''; state.duplicateGroups = []; state.duplicateKeepers.clear();
+  $('#file-more').hidden = true; $('#album-more').hidden = true; $('#player-more').hidden = true;
   $('#duplicate-results').hidden = true; $('#duplicate-empty').hidden = true; $('#duplicate-scan-progress').hidden = true;
   $('#duplicate-open-trash').hidden = true;
   resetPlayer();
@@ -129,6 +137,7 @@ function showApp() {
   $('#account-name').textContent = state.user.username;
   document.querySelectorAll('.admin-only').forEach((item) => { item.hidden = state.user.role !== 'admin'; });
   updateDesktopClock();
+  updateDesktopWidget();
   clearInterval(state.desktopClockTimer);
   state.desktopClockTimer = setInterval(updateDesktopClock, 15_000);
   loadShares().then(() => launchView('files')).catch((error) => notify(error.message, true));
@@ -147,6 +156,7 @@ async function loadShares() {
     element.disabled = state.shares.length === 0;
   }
   syncShareSelectors();
+  updateDesktopWidget();
   renderPermissionOptions();
 }
 
@@ -251,6 +261,10 @@ function createAppWindow(view) {
   element.style.left = `${left}px`;
   element.style.top = `${top}px`;
   $('#window-layer').append(element);
+  element.classList.add('is-entering');
+  element.addEventListener('animationend', (event) => {
+    if (event.animationName === 'window-enter') element.classList.remove('is-entering');
+  }, { once: true });
   const entry = { view, element, panel: sourcePanel, status: 'open', z: ++state.windowZ, maximized: false, restoreRect: null, needsInitialLoad: true };
   element.style.zIndex = String(entry.z);
   state.windows.set(view, entry);
@@ -278,6 +292,20 @@ function updateDesktopClock() {
   const now = new Date();
   clock.textContent = new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
   clock.title = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'full' }).format(now);
+  const widgetTime = $('#desktop-widget-time');
+  const widgetDate = $('#desktop-widget-date');
+  if (widgetTime) {
+    widgetTime.textContent = new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+    widgetTime.dateTime = now.toISOString();
+  }
+  if (widgetDate) widgetDate.textContent = new Intl.DateTimeFormat('zh-TW', { weekday: 'long', month: 'long', day: 'numeric' }).format(now);
+}
+
+function updateDesktopWidget() {
+  const count = $('#desktop-widget-share-count');
+  if (!count) return;
+  count.textContent = state.shares.length === 0 ? '尚未設定' : `${state.shares.length} 個`;
+  count.title = state.shares.length ? state.shares.map((share) => share.name).join('、') : '目前沒有可存取的 Nanako 資料空間';
 }
 
 function toggleLauncherMenu(force) {
@@ -325,6 +353,25 @@ function closeWindow(view) {
   if (!entry) return;
   recordWindowAction(view, 'close');
   if (view === 'player') resetPlayer();
+  if (view === 'album') {
+    state.albumLoadSequence += 1;
+    $('#album-grid').replaceChildren();
+    state.albumItems = []; state.albumImages = []; state.albumRenderedCount = 0;
+    $('#album-more').hidden = true;
+  }
+  if (view === 'player') {
+    state.playerLoadSequence += 1;
+    $('#player-queue').replaceChildren();
+    state.playerItems = []; state.playerRenderedCount = 0;
+    state.activeTrackPath = '';
+    refreshMediaTestTracks();
+    $('#player-more').hidden = true;
+  }
+  if (view === 'files') {
+    clearTimeout(state.fileSearchTimer); state.fileLoadSequence += 1;
+    state.currentItems = []; state.fileRenderedCount = 0; state.selectedItems.clear();
+    $('#file-list').replaceChildren(); $('#file-more').hidden = true; updateBatchToolbar();
+  }
   if (view === 'system') { clearTimeout(state.systemRefreshTimer); state.systemRefreshTimer = null; }
   if (view === 'duplicates') {
     clearTimeout(state.duplicatePollTimer);
@@ -360,8 +407,17 @@ function closeAllWindows() {
     state.duplicateScanId = ''; state.duplicateScanStatus = 'cancelled';
   }
   clearTimeout(state.duplicatePollTimer); clearTimeout(state.systemRefreshTimer); clearInterval(state.desktopClockTimer);
+  clearTimeout(state.fileSearchTimer); clearTimeout(state.albumSearchTimer); clearTimeout(state.playerSearchTimer);
   resetPlayer();
   if ($('#photo-dialog').open) $('#photo-dialog').close();
+  $('#photo-image').removeAttribute('src');
+  state.photoItems = []; state.photoIndex = 0; state.photoShareId = ''; state.photoPath = '';
+  state.albumItems = []; state.albumImages = []; state.albumRenderedCount = 0; state.albumLoadSequence += 1;
+  state.playerItems = []; state.playerRenderedCount = 0; state.playerLoadSequence += 1;
+  state.currentItems = []; state.fileRenderedCount = 0; state.selectedItems.clear(); state.fileLoadSequence += 1;
+  $('#album-grid').replaceChildren(); $('#album-more').hidden = true;
+  $('#player-queue').replaceChildren(); $('#player-more').hidden = true;
+  $('#file-list').replaceChildren(); $('#file-more').hidden = true; updateBatchToolbar();
   for (const selector of ['#duplicate-cleanup-dialog', '#change-password-dialog', '#clear-audit-dialog']) {
     const dialog = $(selector); if (dialog.open) dialog.close();
   }
@@ -499,10 +555,53 @@ function updateBatchToolbar() {
   selectAll.disabled = !state.currentItems.length || !canSelect;
 }
 
+const FILE_BATCH_SIZE = 100;
+
+function appendFileBatch() {
+  const categoryMode = state.fileCategory !== 'all';
+  const canManage = state.canWrite && !categoryMode;
+  const end = Math.min(state.currentItems.length, state.fileRenderedCount + FILE_BATCH_SIZE);
+  const body = $('#file-list');
+  for (const item of state.currentItems.slice(state.fileRenderedCount, end)) {
+    const row = document.createElement('tr');
+    const selectCell = document.createElement('td'); selectCell.className = 'file-select-column';
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !categoryMode && state.selectedItems.has(item.name); checkbox.disabled = !canManage; checkbox.setAttribute('aria-label', `選取${item.name}`);
+    checkbox.addEventListener('change', () => { if (checkbox.checked) state.selectedItems.add(item.name); else state.selectedItems.delete(item.name); updateBatchToolbar(); });
+    selectCell.append(checkbox);
+    const nameCell = document.createElement('td'); const wrapper = document.createElement('div'); wrapper.className = 'item-name';
+    const icon = document.createElement('span'); icon.className = `item-icon${item.isDirectory ? ' folder' : ''}`; icon.setAttribute('aria-hidden', 'true'); icon.textContent = item.isDirectory ? '▰' : '▧';
+    const open = document.createElement('button'); open.type = 'button'; open.textContent = item.name;
+    if (item.isDirectory) open.addEventListener('click', () => navigateFiles(state.path ? `${state.path}/${item.name}` : item.name));
+    else open.addEventListener('click', () => categoryMode ? openCatalogFile(item) : openFile(item));
+    wrapper.append(icon, open); nameCell.append(wrapper);
+    if (categoryMode) { const location = document.createElement('small'); location.className = 'item-location'; location.textContent = item.path; nameCell.append(location); }
+    const dateCell = document.createElement('td'); dateCell.textContent = formatDate(item.modifiedAt);
+    const sizeCell = document.createElement('td'); sizeCell.textContent = item.isDirectory ? '資料夾' : formatSize(item.size);
+    const actionCell = document.createElement('td');
+    if (canManage) {
+      const actions = document.createElement('div'); actions.className = 'row-actions';
+      const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'text-action'; rename.textContent = '重新命名'; rename.addEventListener('click', () => renameItem(item.name)); actions.append(rename);
+      if (!item.name.toLocaleLowerCase('en-US').endsWith('.zip')) {
+        const compress = document.createElement('button'); compress.type = 'button'; compress.className = 'text-action'; compress.textContent = '壓縮 ZIP'; compress.addEventListener('click', () => runArchiveAction(item.name, 'create', compress)); actions.append(compress);
+      } else {
+        const extract = document.createElement('button'); extract.type = 'button'; extract.className = 'text-action'; extract.textContent = '解壓縮'; extract.addEventListener('click', () => runArchiveAction(item.name, 'extract', extract)); actions.append(extract);
+      }
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-action danger'; remove.textContent = '移至回收桶'; remove.addEventListener('click', () => deleteItem(item.name)); actions.append(remove);
+      actionCell.append(actions);
+    }
+    row.append(selectCell, nameCell, dateCell, sizeCell, actionCell); body.append(row);
+  }
+  state.fileRenderedCount = end;
+  const more = $('#file-more');
+  more.hidden = end >= state.currentItems.length;
+  more.textContent = `載入更多項目（${end}／${state.currentItems.length}）`;
+}
+
 async function loadFiles() {
   const loadSequence = ++state.fileLoadSequence;
   syncFileManagerNavigation();
-  if (!state.shareId) { state.currentItems = []; state.canWrite = false; $('#file-list').replaceChildren(); $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return false; }
+  $('#file-more').hidden = true;
+  if (!state.shareId) { state.currentItems = []; state.fileRenderedCount = 0; state.canWrite = false; $('#file-list').replaceChildren(); $('#file-more').hidden = true; $('#empty-files').hidden = false; renderBreadcrumb($('#breadcrumb'), state.path, navigateFiles); updateBatchToolbar(); return false; }
   try {
     const categoryMode = state.fileCategory !== 'all';
     if (categoryMode) {
@@ -541,46 +640,15 @@ async function loadFiles() {
     const canManage = canWrite && !categoryMode;
     $('#new-folder').disabled = !canManage; $('#file-input').disabled = !canManage;
     $('#upload-file-label').setAttribute('aria-disabled', String(!canManage));
-    for (const item of visibleItems) {
-      const row = document.createElement('tr');
-      const selectCell = document.createElement('td'); selectCell.className = 'file-select-column';
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !categoryMode && state.selectedItems.has(item.name); checkbox.disabled = !canManage; checkbox.setAttribute('aria-label', `選取${item.name}`);
-      checkbox.addEventListener('change', () => { if (checkbox.checked) state.selectedItems.add(item.name); else state.selectedItems.delete(item.name); updateBatchToolbar(); });
-      selectCell.append(checkbox);
-      const nameCell = document.createElement('td'); const wrapper = document.createElement('div'); wrapper.className = 'item-name';
-      const icon = document.createElement('span'); icon.className = `item-icon${item.isDirectory ? ' folder' : ''}`; icon.setAttribute('aria-hidden', 'true'); icon.textContent = item.isDirectory ? '▰' : '▧';
-      const open = document.createElement('button'); open.type = 'button'; open.textContent = item.name;
-      if (item.isDirectory) open.addEventListener('click', () => navigateFiles(state.path ? `${state.path}/${item.name}` : item.name));
-      else open.addEventListener('click', () => categoryMode ? openCatalogFile(item) : openFile(item));
-      wrapper.append(icon, open); nameCell.append(wrapper);
-      if (categoryMode) {
-        const location = document.createElement('small'); location.className = 'item-location'; location.textContent = item.path;
-        nameCell.append(location);
-      }
-      const dateCell = document.createElement('td'); dateCell.textContent = formatDate(item.modifiedAt);
-      const sizeCell = document.createElement('td'); sizeCell.textContent = item.isDirectory ? '資料夾' : formatSize(item.size);
-      const actionCell = document.createElement('td');
-      if (canManage) {
-        const actions = document.createElement('div'); actions.className = 'row-actions';
-        const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'text-action'; rename.textContent = '重新命名'; rename.addEventListener('click', () => renameItem(item.name)); actions.append(rename);
-        if (!item.name.toLocaleLowerCase('en-US').endsWith('.zip')) {
-          const compress = document.createElement('button'); compress.type = 'button'; compress.className = 'text-action'; compress.textContent = '壓縮 ZIP';
-          compress.addEventListener('click', () => runArchiveAction(item.name, 'create', compress)); actions.append(compress);
-        } else {
-          const extract = document.createElement('button'); extract.type = 'button'; extract.className = 'text-action'; extract.textContent = '解壓縮';
-          extract.addEventListener('click', () => runArchiveAction(item.name, 'extract', extract)); actions.append(extract);
-        }
-        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-action danger'; remove.textContent = '移至回收桶'; remove.addEventListener('click', () => deleteItem(item.name)); actions.append(remove);
-        actionCell.append(actions);
-      }
-      row.append(selectCell, nameCell, dateCell, sizeCell, actionCell); body.append(row);
-    }
+    state.fileRenderedCount = 0;
+    $('#file-more').hidden = true;
+    appendFileBatch();
     updateBatchToolbar();
     return true;
   } catch (error) {
     if (loadSequence !== state.fileLoadSequence) return false;
-    state.currentItems = []; state.canWrite = false; state.selectedItems.clear();
-    $('#file-list').replaceChildren(); $('#empty-files').hidden = false;
+    state.currentItems = []; state.fileRenderedCount = 0; state.canWrite = false; state.selectedItems.clear();
+    $('#file-list').replaceChildren(); $('#file-more').hidden = true; $('#empty-files').hidden = false;
     $('#empty-files strong').textContent = '無法載入檔案'; $('#empty-files span').textContent = '請確認資料空間權限或重新整理後再試。';
     $('#new-folder').disabled = true; $('#file-input').disabled = true;
     updateBatchToolbar(); notify(error.message, true); return false;
@@ -622,6 +690,9 @@ function openFile(item) {
     openPhotoGallery(state.currentItems, state.path, state.shareId, item.name);
   } else if (kind === 'audio' || kind === 'video') {
     state.playerPath = state.path;
+    state.playerScopeAll = false;
+    state.playerSearch = '';
+    $('#player-search').value = '';
     state.pendingTrackPath = joinedPath(item.name);
     showView('player');
   } else {
@@ -633,7 +704,7 @@ function openPhotoGallery(items, folderPath, shareId, selectedName = '') {
   state.photoItems = items.filter((item) => !item.isDirectory && mediaKind(item.name) === 'image');
   state.photoPath = folderPath;
   state.photoShareId = shareId;
-  const index = state.photoItems.findIndex((item) => item.name === selectedName);
+  const index = state.photoItems.findIndex((item) => item.path ? item.path === selectedName : item.name === selectedName);
   if (index >= 0) showPhoto(index);
 }
 
@@ -643,8 +714,8 @@ function showPhoto(index) {
   const item = state.photoItems[state.photoIndex];
   const image = $('#photo-image');
   image.alt = item.name;
-  image.src = mediaUrl(state.photoShareId, state.photoPath ? `${state.photoPath}/${item.name}` : item.name);
-  $('#photo-caption').textContent = item.name;
+  image.src = mediaUrl(state.photoShareId, mediaItemPath(item, state.photoPath));
+  $('#photo-caption').textContent = item.path || item.name;
   $('#photo-prev').disabled = state.photoItems.length < 2;
   $('#photo-next').disabled = state.photoItems.length < 2;
   const dialog = $('#photo-dialog');
@@ -1093,17 +1164,96 @@ async function clearAllAuditLogs(event) {
   finally { button.disabled = $('#clear-audit-confirm').value !== '刪除所有紀錄'; }
 }
 
-async function loadAlbum() {
+function setAlbumScopeAll(isAll) {
+  state.albumScopeAll = isAll;
+  if (!isAll && !state.albumPath) state.albumPath = '';
+  loadAlbum();
+}
+
+const ALBUM_BATCH_SIZE = 48;
+const PLAYER_BATCH_SIZE = 48;
+
+function appendAlbumBatch() {
+  const allScope = state.albumScopeAll;
   const grid = $('#album-grid');
-  if (!state.shareId) { grid.replaceChildren(); $('#empty-album').hidden = false; return; }
+  const end = Math.min(state.albumImages.length, state.albumRenderedCount + ALBUM_BATCH_SIZE);
+  for (const item of state.albumImages.slice(state.albumRenderedCount, end)) {
+    const relativePath = mediaItemPath(item, state.albumPath);
+    const card = document.createElement('button'); card.type = 'button'; card.className = 'album-card';
+    const image = document.createElement('img'); image.loading = 'lazy'; image.decoding = 'async'; image.alt = item.name;
+    image.src = mediaUrl(state.shareId, relativePath);
+    image.addEventListener('error', () => { card.classList.add('image-unavailable'); image.removeAttribute('src'); }, { once: true });
+    const caption = document.createElement('span'); caption.textContent = item.name;
+    card.append(image, caption);
+    if (allScope) { const location = document.createElement('small'); location.className = 'media-location'; location.textContent = relativePath; card.append(location); }
+    card.addEventListener('click', () => openPhotoGallery(state.albumImages, state.albumPath, state.shareId, allScope ? relativePath : item.name));
+    grid.append(card);
+  }
+  state.albumRenderedCount = end;
+  const more = $('#album-more');
+  more.hidden = end >= state.albumImages.length;
+  more.textContent = `載入更多圖片（${end}／${state.albumImages.length}）`;
+}
+
+function appendPlayerBatch() {
+  const allScope = state.playerScopeAll;
+  const queue = $('#player-queue');
+  const end = Math.min(state.playerItems.length, state.playerRenderedCount + PLAYER_BATCH_SIZE);
+  for (let index = state.playerRenderedCount; index < end; index += 1) {
+    const item = state.playerItems[index];
+    const relativePath = mediaItemPath(item, state.playerPath);
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'queue-track';
+    button.dataset.trackPath = relativePath;
+    button.setAttribute('aria-current', String(state.activeTrackPath === relativePath));
+    const name = document.createElement('span'); name.textContent = item.name;
+    const details = document.createElement('small'); details.textContent = `${mediaKind(item.name) === 'video' ? '影片' : '音訊'} · ${formatSize(item.size)}${allScope ? ` · ${relativePath}` : ''}`;
+    button.append(name, details); button.addEventListener('click', () => playTrack(index)); queue.append(button);
+  }
+  state.playerRenderedCount = end;
+  const more = $('#player-more');
+  more.hidden = end >= state.playerItems.length;
+  more.textContent = `載入更多影音（${end}／${state.playerItems.length}）`;
+}
+
+async function loadAlbum() {
+  const loadSequence = ++state.albumLoadSequence;
+  const grid = $('#album-grid');
+  if (!state.shareId) {
+    grid.replaceChildren(); grid.setAttribute('aria-busy', 'false'); state.albumItems = []; state.albumImages = []; state.albumRenderedCount = 0; $('#album-more').hidden = true;
+    $('#empty-album').hidden = false; $('#empty-album strong').textContent = '沒有可存取的資料空間'; $('#empty-album span').textContent = '請確認目前帳號的 Nanako 資料空間權限。';
+    return false;
+  }
+  const allScope = state.albumScopeAll;
+  $('#album-scope-toggle').textContent = allScope ? '依資料夾瀏覽' : '瀏覽整個資料空間';
+  $('#album-scope-note').textContent = allScope
+    ? '顯示目前 Nanako 資料空間內的圖片；點選圖片可檢視，清單最多顯示 1,000 張。'
+    : '依 Nanako 資料夾逐層瀏覽圖片；不會離開目前資料空間。';
+  $('#album-catalog-message').hidden = true;
+  $('#album-more').hidden = true;
+  $('#empty-album').hidden = false;
+  $('#empty-album strong').textContent = allScope ? '正在搜尋圖片…' : '正在載入資料夾…';
+  $('#empty-album span').textContent = '只讀取目前選取的 Nanako 資料空間。';
+  grid.setAttribute('aria-busy', 'true');
+  grid.replaceChildren();
   try {
-    const query = new URLSearchParams({ shareId: state.shareId, path: state.albumPath });
-    const { items } = await api(`/api/files?${query}`);
+    const query = allScope
+      ? new URLSearchParams({ shareId: state.shareId, category: 'image', search: state.albumSearch })
+      : new URLSearchParams({ shareId: state.shareId, path: state.albumPath });
+    const result = await api(`${allScope ? '/api/files/search' : '/api/files'}?${query}`);
+    if (loadSequence !== state.albumLoadSequence) return false;
+    grid.setAttribute('aria-busy', 'false');
+    const { items } = result;
     state.albumItems = items;
-    state.albumImages = items.filter((item) => !item.isDirectory && mediaKind(item.name) === 'image');
-    renderBreadcrumb($('#album-breadcrumb'), state.albumPath, (next) => { state.albumPath = next; loadAlbum(); });
+    const matchesSearch = (item) => !state.albumSearch || item.name.toLocaleLowerCase('zh-TW').includes(state.albumSearch.trim().toLocaleLowerCase('zh-TW'));
+    state.albumImages = items.filter((item) => !item.isDirectory && mediaKind(item.name) === 'image' && matchesSearch(item));
+    state.albumRenderedCount = 0;
+    if (allScope) {
+      renderBreadcrumb($('#album-breadcrumb'), '', () => setAlbumScopeAll(false));
+      const crumb = document.createElement('span'); crumb.textContent = '全部圖片（整個資料空間）'; crumb.setAttribute('aria-current', 'page');
+      $('#album-breadcrumb').append(document.createTextNode(' › '), crumb);
+    } else renderBreadcrumb($('#album-breadcrumb'), state.albumPath, (next) => { state.albumPath = next; loadAlbum(); });
     grid.replaceChildren();
-    const folders = items.filter((item) => item.isDirectory);
+    const folders = allScope ? [] : items.filter((item) => item.isDirectory);
     for (const folder of folders) {
       const button = document.createElement('button');
       button.type = 'button'; button.className = 'album-folder';
@@ -1113,30 +1263,67 @@ async function loadAlbum() {
       button.addEventListener('click', () => { state.albumPath = state.albumPath ? `${state.albumPath}/${folder.name}` : folder.name; loadAlbum(); });
       grid.append(button);
     }
-    for (const item of state.albumImages) {
-      const card = document.createElement('button'); card.type = 'button'; card.className = 'album-card';
-      const image = document.createElement('img'); image.loading = 'lazy'; image.decoding = 'async'; image.alt = '';
-      image.src = mediaUrl(state.shareId, state.albumPath ? `${state.albumPath}/${item.name}` : item.name);
-      image.addEventListener('error', () => { card.classList.add('image-unavailable'); image.removeAttribute('src'); }, { once: true });
-      const caption = document.createElement('span'); caption.textContent = item.name;
-      card.append(image, caption);
-      card.addEventListener('click', () => openPhotoGallery(state.albumImages, state.albumPath, state.shareId, item.name));
-      grid.append(card);
+    appendAlbumBatch();
+    if (allScope && result.truncated) {
+      $('#album-catalog-message').textContent = '圖片數量較多，目前只顯示前 1,000 張；請輸入檔名縮小範圍。';
+      $('#album-catalog-message').hidden = false;
     }
     $('#empty-album').hidden = state.albumImages.length > 0 || folders.length > 0;
-  } catch (error) { notify(error.message, true); }
+    $('#empty-album strong').textContent = state.albumImages.length ? '' : allScope ? '找不到符合的圖片' : '這個資料夾沒有圖片';
+    $('#empty-album span').textContent = state.albumImages.length ? '' : '支援 JPG、PNG、GIF、WebP、AVIF 與 BMP。';
+    return true;
+  } catch (error) {
+    if (loadSequence !== state.albumLoadSequence) return false;
+    grid.setAttribute('aria-busy', 'false');
+    grid.replaceChildren(); state.albumImages = []; state.albumRenderedCount = 0; $('#album-more').hidden = true;
+    $('#empty-album').hidden = false; $('#empty-album strong').textContent = '無法載入圖片'; $('#empty-album span').textContent = '請確認資料空間權限或重新整理後再試。';
+    notify(error.message, true); return false;
+  }
+}
+
+function setPlayerScopeAll(isAll) {
+  state.playerScopeAll = isAll;
+  loadPlayer();
 }
 
 async function loadPlayer() {
+  const loadSequence = ++state.playerLoadSequence;
   const queue = $('#player-queue');
-  if (!state.shareId) { state.playerItems = []; refreshMediaTestTracks(); queue.replaceChildren(); $('#empty-player').hidden = false; resetPlayer(); return; }
+  if (!state.shareId) {
+    state.playerItems = []; state.playerRenderedCount = 0; refreshMediaTestTracks(); queue.replaceChildren(); queue.setAttribute('aria-busy', 'false'); $('#player-more').hidden = true; $('#empty-player').hidden = false;
+    $('#empty-player strong').textContent = '沒有可存取的資料空間'; $('#empty-player span').textContent = '請確認目前帳號的 Nanako 資料空間權限。';
+    resetPlayer(); return false;
+  }
+  const allScope = state.playerScopeAll;
+  $('#player-scope-toggle').textContent = allScope ? '依資料夾瀏覽' : '瀏覽整個資料空間';
+  $('#player-scope-note').textContent = allScope
+    ? '播放清單涵蓋目前 Nanako 資料空間中的音訊與影片；清單最多顯示 1,000 項。'
+    : '播放清單只涵蓋目前所在的 Nanako 資料夾。';
+  $('#player-catalog-message').hidden = true;
+  $('#player-more').hidden = true;
+  queue.replaceChildren();
+  $('#empty-player').hidden = false;
+  $('#empty-player strong').textContent = allScope ? '正在搜尋影音…' : '正在載入資料夾…';
+  $('#empty-player span').textContent = '只讀取目前選取的 Nanako 資料空間。';
+  queue.setAttribute('aria-busy', 'true');
   try {
-    const query = new URLSearchParams({ shareId: state.shareId, path: state.playerPath });
-    const { items } = await api(`/api/files?${query}`);
-    const folders = items.filter((item) => item.isDirectory);
-    state.playerItems = items.filter((item) => !item.isDirectory && ['audio', 'video'].includes(mediaKind(item.name)));
+    const query = allScope
+      ? new URLSearchParams({ shareId: state.shareId, category: 'media', search: state.playerSearch })
+      : new URLSearchParams({ shareId: state.shareId, path: state.playerPath });
+    const result = await api(`${allScope ? '/api/files/search' : '/api/files'}?${query}`);
+    if (loadSequence !== state.playerLoadSequence) return false;
+    queue.setAttribute('aria-busy', 'false');
+    const items = result.items;
+    const folders = allScope ? [] : items.filter((item) => item.isDirectory);
+    state.playerItems = items.filter((item) => !item.isDirectory && ['audio', 'video'].includes(mediaKind(item.name))
+      && (allScope || !state.playerSearch || item.name.toLocaleLowerCase('zh-TW').includes(state.playerSearch.trim().toLocaleLowerCase('zh-TW'))));
+    state.playerRenderedCount = 0;
     refreshMediaTestTracks();
-    renderBreadcrumb($('#player-breadcrumb'), state.playerPath, (next) => { state.playerPath = next; loadPlayer(); });
+    if (allScope) {
+      renderBreadcrumb($('#player-breadcrumb'), '', () => setPlayerScopeAll(false));
+      const crumb = document.createElement('span'); crumb.textContent = '所有影音（整個資料空間）'; crumb.setAttribute('aria-current', 'page');
+      $('#player-breadcrumb').append(document.createTextNode(' › '), crumb);
+    } else renderBreadcrumb($('#player-breadcrumb'), state.playerPath, (next) => { state.playerPath = next; loadPlayer(); });
     queue.replaceChildren();
     for (const folder of folders) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'queue-folder';
@@ -1144,30 +1331,36 @@ async function loadPlayer() {
       button.addEventListener('click', () => { state.playerPath = state.playerPath ? `${state.playerPath}/${folder.name}` : folder.name; loadPlayer(); });
       queue.append(button);
     }
-    for (const [index, item] of state.playerItems.entries()) {
-      const relativePath = state.playerPath ? `${state.playerPath}/${item.name}` : item.name;
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'queue-track';
-      button.setAttribute('aria-current', String(state.activeTrackPath === relativePath));
-      const name = document.createElement('span'); name.textContent = item.name;
-      const details = document.createElement('small'); details.textContent = `${mediaKind(item.name) === 'video' ? '影片' : '音訊'} · ${formatSize(item.size)}`;
-      button.append(name, details); button.addEventListener('click', () => playTrack(index)); queue.append(button);
+    appendPlayerBatch();
+    $('#empty-player').hidden = state.playerItems.length > 0 || folders.length > 0;
+    $('#empty-player strong').textContent = state.playerItems.length || folders.length ? '' : allScope ? '找不到可播放的影音' : '這個資料夾沒有可播放的影音';
+    $('#empty-player span').textContent = state.playerItems.length || folders.length ? '' : '支援格式的實際播放能力依 Electron 內建 Chromium 與檔案編碼而異。';
+    if (allScope && result.truncated) {
+      $('#player-catalog-message').textContent = '影音數量較多，目前只顯示前 1,000 項；請輸入檔名縮小範圍。';
+      $('#player-catalog-message').hidden = false;
     }
-    $('#empty-player').hidden = state.playerItems.length > 0;
     const pending = state.pendingTrackPath;
     state.pendingTrackPath = '';
     if (pending) {
-      const index = state.playerItems.findIndex((item) => (state.playerPath ? `${state.playerPath}/${item.name}` : item.name) === pending);
+      const index = state.playerItems.findIndex((item) => mediaItemPath(item, state.playerPath) === pending);
       if (index >= 0) playTrack(index);
       else notify('這個檔案目前無法播放。', true);
     }
-  } catch (error) { notify(error.message, true); }
+    return true;
+  } catch (error) {
+    if (loadSequence !== state.playerLoadSequence) return false;
+    queue.setAttribute('aria-busy', 'false');
+    state.playerItems = []; state.playerRenderedCount = 0; refreshMediaTestTracks(); queue.replaceChildren(); $('#player-more').hidden = true;
+    $('#empty-player').hidden = false; $('#empty-player strong').textContent = '無法載入播放清單'; $('#empty-player span').textContent = '請確認資料空間權限或重新整理後再試。';
+    notify(error.message, true); return false;
+  }
 }
 
 function playTrack(index) {
   const item = state.playerItems[index];
   if (!item) return;
   const kind = mediaKind(item.name);
-  const relativePath = state.playerPath ? `${state.playerPath}/${item.name}` : item.name;
+  const relativePath = mediaItemPath(item, state.playerPath);
   const url = mediaUrl(state.shareId, relativePath);
   const video = $('#video-player'); const audio = $('#audio-player');
   const player = kind === 'video' ? video : audio;
@@ -1183,7 +1376,7 @@ function playTrack(index) {
   $('#player-placeholder').hidden = true;
   $('#player-message').hidden = true;
   for (const button of document.querySelectorAll('.queue-track')) {
-    const isCurrent = button.querySelector('span')?.textContent === item.name;
+    const isCurrent = button.dataset.trackPath === relativePath;
     button.setAttribute('aria-current', String(isCurrent));
   }
   player.play().catch(() => {
@@ -1195,7 +1388,7 @@ function playTrack(index) {
 }
 
 function playNextTrack() {
-  const currentIndex = state.playerItems.findIndex((item) => (state.playerPath ? `${state.playerPath}/${item.name}` : item.name) === state.activeTrackPath);
+  const currentIndex = state.playerItems.findIndex((item) => mediaItemPath(item, state.playerPath) === state.activeTrackPath);
   if (currentIndex >= 0 && currentIndex + 1 < state.playerItems.length) playTrack(currentIndex + 1);
 }
 
@@ -1325,13 +1518,13 @@ function refreshMediaTestTracks() {
   const select = $('#media-test-track');
   const previous = select.value;
   select.replaceChildren(...state.playerItems.map((item) => {
-    const relativePath = state.playerPath ? `${state.playerPath}/${item.name}` : item.name;
+    const relativePath = mediaItemPath(item, state.playerPath);
     const option = document.createElement('option');
     option.value = relativePath;
-    option.textContent = `${item.name}（${mediaKind(item.name) === 'video' ? '影片' : '音訊'}）`;
+    option.textContent = `${item.name}（${mediaKind(item.name) === 'video' ? '影片' : '音訊'} · ${relativePath}）`;
     return option;
   }));
-  if (state.playerItems.some((item) => (state.playerPath ? `${state.playerPath}/${item.name}` : item.name) === previous)) select.value = previous;
+  if (state.playerItems.some((item) => mediaItemPath(item, state.playerPath) === previous)) select.value = previous;
   select.disabled = state.playerItems.length === 0;
   $('#media-test-run').disabled = !select.value;
 }
@@ -1519,6 +1712,19 @@ initializeDesktopInteractions();
 for (const selector of ['#share-select', '#trash-share-select', '#album-share-select', '#player-share-select', '#duplicates-share-select']) {
   $(selector).addEventListener('change', (event) => selectShare(event.target.value));
 }
+$('#album-scope-toggle').addEventListener('click', () => setAlbumScopeAll(!state.albumScopeAll));
+$('#album-more').addEventListener('click', appendAlbumBatch);
+$('#file-more').addEventListener('click', appendFileBatch);
+$('#album-search').addEventListener('input', () => {
+  clearTimeout(state.albumSearchTimer);
+  state.albumSearchTimer = setTimeout(() => { state.albumSearch = $('#album-search').value; loadAlbum(); }, 400);
+});
+$('#player-scope-toggle').addEventListener('click', () => setPlayerScopeAll(!state.playerScopeAll));
+$('#player-more').addEventListener('click', appendPlayerBatch);
+$('#player-search').addEventListener('input', () => {
+  clearTimeout(state.playerSearchTimer);
+  state.playerSearchTimer = setTimeout(() => { state.playerSearch = $('#player-search').value; loadPlayer(); }, 400);
+});
 $('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
 $('#upload-file-label').addEventListener('click', (event) => { if ($('#file-input').disabled) { event.preventDefault(); event.stopPropagation(); } });
 $('#file-search').addEventListener('input', () => {
@@ -1541,6 +1747,10 @@ $('#photo-close').addEventListener('click', () => $('#photo-dialog').close());
 $('#photo-prev').addEventListener('click', () => showPhoto(state.photoIndex - 1));
 $('#photo-next').addEventListener('click', () => showPhoto(state.photoIndex + 1));
 $('#photo-dialog').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
+$('#photo-dialog').addEventListener('close', () => {
+  $('#photo-image').removeAttribute('src');
+  state.photoItems = []; state.photoIndex = 0; state.photoShareId = ''; state.photoPath = '';
+});
 $('#video-player').addEventListener('ended', playNextTrack);
 $('#audio-player').addEventListener('ended', playNextTrack);
 $('#media-test-track').addEventListener('change', () => {

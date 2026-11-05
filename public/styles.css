@@ -122,6 +122,10 @@
 @media(max-width:900px){.desktop-shortcuts{left:10px;width:76px}.desktop-icon{width:72px;min-height:82px;font-size:10px}.desktop-icon-art{transform:scale(.86)}.app-window{left:91px;width:calc(100% - 105px);min-width:0}.window-app-body{grid-template-columns:154px minmax(0,1fr)}.app-window .workspace{padding:17px 17px 14px}.app-window .sidebar{padding:17px 9px 9px}}
 @media(max-width:620px){.desktop-shell.app-shell{min-height:500px}.system-bar{padding:0 6px}.system-bar-label,.system-local-status,.desktop-clock{display:none}.system-bar-start,.system-bar-end{gap:3px}.app-window{left:7px;top:48px;width:calc(100% - 14px);height:calc(100% - 120px);min-height:0;border-radius:10px}.window-app-body{grid-template-columns:54px minmax(0,1fr)}.app-window .sidebar{padding:10px 4px}.app-window .sidebar-label,.app-window .sidebar-bottom{display:none}.app-window .sidebar nav{gap:3px}.app-window .nav-item{justify-content:center;min-height:40px;padding:8px 3px;font-size:0;gap:0}.app-window .nav-glyph{width:auto;font-size:17px}.app-window .workspace{padding:14px 12px 12px}.app-window .topbar h1{font-size:17px}.app-window .topbar .eyebrow{display:none}.app-window .content-heading{align-items:flex-start;flex-direction:column;gap:10px}.app-window .toolbar{width:100%}.app-window .toolbar .button{flex:1}.app-window .management-grid{grid-template-columns:1fr}.app-window .file-controls{align-items:flex-start;flex-direction:column;gap:10px}.app-window .field-inline{width:100%;justify-content:space-between}.app-window .field-inline select{flex:1;min-width:0}.desktop-shortcuts{left:auto;right:10px;top:8px;bottom:66px;width:auto;max-width:calc(100% - 20px);flex-direction:row;align-items:flex-start;gap:3px;overflow-x:auto;overflow-y:hidden}.desktop-icon{width:60px;min-width:60px;min-height:56px;padding:3px 2px;font-size:9px;gap:0}.desktop-icon-art{display:none}.desktop-dock{bottom:7px;height:46px}.launcher-menu{bottom:64px}.launcher-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.launcher-grid>button{min-height:65px}.launcher-footer{font-size:8px}.app-window.is-maximized{left:5px!important;top:42px!important;width:calc(100% - 10px)!important;height:calc(100% - 105px)!important}}
 @media(prefers-reduced-motion:reduce){.app-window,.desktop-icon,.launcher-grid>button{transition:none!important;scroll-behavior:auto!important}}
+.app-window.is-entering{animation:window-enter .16s ease-out both}
+@keyframes window-enter{from{opacity:.01;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+.media-more{display:flex;width:min(100%,320px);margin:4px auto 18px;min-height:40px}
+@media(prefers-reduced-motion:reduce){.app-window.is-entering{animation:none}}
 
 /* 系統設定與稽核紀錄 */
 .button.danger{background:#a63e36;color:#fff}.button.danger:hover{background:#87312b}.button:disabled{opacity:.5;cursor:not-allowed;transform:none}
@@ -220,3 +224,37 @@
 @media(max-width:620px){.app-window.file-manager-window .workspace{padding:0}.file-manager-view{display:flex;flex-direction:column}.file-manager-sidebar{flex-direction:row;align-items:flex-start;gap:8px;padding:8px;overflow-x:auto;border-right:0;border-bottom:1px solid #e4eaf0}.file-nav-group{display:flex;align-items:center;gap:3px;flex:none}.file-nav-group h3{display:none}.file-nav-item{width:auto;min-height:34px;white-space:nowrap;padding:6px 8px}.file-nav-item>span{width:auto}.file-manager-content{padding:12px}.file-manager-content .file-controls{align-items:stretch;flex-direction:column}.file-manager-content .field-inline,.file-search,.file-sort{width:100%}.file-search input,.file-sort select{width:100%}}
 .item-location{display:block;margin:3px 0 0 40px;max-width:440px;overflow:hidden;color:#687782;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .file-manager-view.category-mode .file-select-column,.file-manager-view.category-mode th:last-child,.file-manager-view.category-mode td:last-child{display:none}.upload-button[aria-disabled="true"]{cursor:not-allowed;opacity:.52}
+.media-library-controls{flex-wrap:wrap;gap:10px 14px}.media-library-controls .breadcrumb{flex:1 1 140px;min-width:140px}.media-library-controls .file-search{flex:1 1 180px}.media-library-controls .file-search input{width:100%}.media-location{display:block;padding:0 12px 10px;overflow:hidden;color:var(--muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.queue-track small{overflow-wrap:anywhere;line-height:1.45}
+
+/* OmaLauncher / HTCHome / PieLauncher-inspired presentation: local status and quick access, without copied assets or platform services. */
+.desktop-status-widget{position:absolute;z-index:1;top:24px;right:24px;width:min(286px,calc(100% - 180px));padding:16px 17px 13px;border:1px solid rgba(255,255,255,.46);border-radius:12px;background:linear-gradient(145deg,rgba(247,251,253,.9),rgba(225,241,249,.78));box-shadow:0 12px 34px rgba(7,44,70,.2);backdrop-filter:blur(16px);color:#27465b;animation:widget-appear .28s ease-out both}
+.desktop-widget-heading,.desktop-widget-storage,.desktop-widget-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.desktop-widget-heading{font-size:10px;font-weight:700;letter-spacing:.08em;color:#486a80}
+.widget-online{display:flex;align-items:center;gap:6px;font-size:9px;font-weight:500;letter-spacing:0;color:#416c63}
+.widget-online .status-dot{width:6px;height:6px}
+.desktop-widget-time{display:block;margin-top:9px;font-size:34px;font-weight:550;line-height:1.05;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:#163c58}
+.desktop-widget-date{margin:4px 0 0;font-size:10px;color:#668093}
+.desktop-widget-rule{height:1px;margin:11px 0;background:rgba(64,112,140,.18)}
+.desktop-widget-storage{font-size:10px;color:#60788a}
+.desktop-widget-storage strong{font-size:12px;font-weight:650;color:#244d68}
+.desktop-widget-footer{margin-top:10px;color:#708696;font-size:9px}
+.widget-link{border:0;padding:3px 0;background:transparent;color:#126ac2;font-size:9px;font-weight:650}
+.widget-link:hover{text-decoration:underline}
+.launcher-quick-access{padding:11px 0 10px;border-bottom:1px solid #dfe8ee}
+.launcher-quick-access h2{margin:0 2px 7px;color:#74899a;font-size:9px;font-weight:650;letter-spacing:.08em}
+.launcher-quick-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.launcher-quick-list>button{display:flex;align-items:center;gap:8px;min-width:0;min-height:39px;border:1px solid #e2ebf1;border-radius:7px;padding:5px 7px;background:rgba(255,255,255,.62);color:#405b6f;font-size:10px;text-align:left;transition:background .12s ease,border-color .12s ease,transform .12s ease}
+.launcher-quick-list>button:hover{transform:translateY(-1px);border-color:#c5ddeb;background:#fff}
+.launcher-quick-glyph{position:relative;display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:6px;filter:drop-shadow(0 2px 3px rgba(38,68,90,.12))}
+.launcher-quick-glyph.folder-art{width:22px;height:16px;margin:3px 1px 0;border-radius:4px}
+.launcher-quick-glyph.folder-art::before{top:-4px;width:10px;height:6px}
+.launcher-quick-glyph.folder-art>span{top:4px;height:4px}
+.launcher-quick-glyph.album-art>span,.launcher-quick-glyph.album-art>i{width:9px;height:9px;left:5px;top:4px;box-shadow:6px 3px 0 #69b7fa,2px 8px 0 #ffd45c,-2px 5px 0 #d795f7}
+.launcher-quick-glyph.album-art>i{transform:translate(4px,1px) scale(.7)}
+.launcher-quick-glyph.player-art{font-size:10px}
+.launcher-menu:not([hidden]){animation:launcher-appear .14s ease-out both}
+@keyframes widget-appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes launcher-appear{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:900px){.desktop-status-widget{right:16px;width:250px;padding:13px 14px 11px}.desktop-widget-time{font-size:29px}}
+@media(max-width:620px){.desktop-status-widget{display:none}.launcher-quick-list{gap:4px}.launcher-quick-list>button{gap:5px;padding:4px 5px;font-size:9px}}
+@media(prefers-reduced-motion:reduce){.desktop-status-widget,.launcher-menu:not([hidden]){animation:none}.launcher-quick-list>button{transition:none}}

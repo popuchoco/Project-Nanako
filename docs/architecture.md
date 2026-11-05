@@ -28,6 +28,7 @@ Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口與本
 - `src/server.mjs`：本機 HTTP API、登入、權限檢查、操作紀錄、檔案／資源回收桶／ZIP 作業、靜態檔案。
 - `src/archives.mjs`：限制 NanakoData 路徑範圍的 ZIP 串流建立與解壓縮、中央目錄／路徑／CRC／大小驗證。
 - `src/duplicates.mjs`：限定 NanakoData 範圍的檔案列舉、串流 SHA-256 雜湊、進度回報、取消與重複群組整理。
+- `src/file-catalog.mjs`：限定單一 Nanako 資料空間、跳過內部目錄及符號連結的圖片／影音／文件遞迴索引；以目錄串流方式列舉，單次最多檢查 100,000 個項目並回傳 1,000 項。
 - `src/run.mjs`：供開發及測試使用的命令列啟動器。
 - `public/`：繁體中文（台灣）介面，透過同源 HTTP 呼叫 API。
 - `test/`：使用暫存資料目錄的 API 整合測試。

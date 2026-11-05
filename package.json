@@ -24,6 +24,10 @@
     "appId": "tw.project-nanako.desktop",
     "productName": "Project Nanako",
     "asar": true,
+    "electronLanguages": [
+      "en-US",
+      "zh-TW"
+    ],
     "directories": {
       "output": "dist"
     },
@@ -35,7 +39,16 @@
       "electron/**/*",
       "src/**/*",
       "public/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/@zip.js/zip.js/dist/**",
+      "!node_modules/@zip.js/zip.js/BENCHMARKS.md",
+      "!node_modules/@zip.js/zip.js/README.md",
+      "!node_modules/@zip.js/zip.js/deno.json",
+      "!node_modules/@zip.js/zip.js/eslint.config.mjs",
+      "!node_modules/@zip.js/zip.js/release.sh",
+      "!node_modules/@zip.js/zip.js/sync-versions.js",
+      "!node_modules/@zip.js/zip.js/index.d.ts",
+      "!node_modules/@zip.js/zip.js/index.d.cts"
     ],
     "win": {
       "target": [

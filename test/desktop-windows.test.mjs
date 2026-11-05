@@ -16,6 +16,11 @@ test('desktop shell contains independent Nanako application-window regions and s
   assert.match(html, /id="app-window-template"/);
   assert.match(html, /id="taskbar-windows"/);
   assert.match(html, /id="dock-windows"/);
+  assert.match(html, /class="desktop-status-widget"/);
+  assert.match(html, /id="desktop-widget-time"/);
+  assert.match(html, /id="desktop-widget-share-count"/);
+  assert.match(html, /class="launcher-quick-access"/);
+  assert.match(html, /id="launcher-quick-title"/);
   assert.match(html, /data-window-action="minimize"/);
   assert.match(html, /data-window-action="maximize"/);
   assert.match(html, /data-window-action="close"/);
@@ -33,6 +38,9 @@ test('desktop shell contains independent Nanako application-window regions and s
   assert.match(fileListing, /item\.name\.toLocaleLowerCase\('zh-TW'\)\.includes\(query\)/);
   assert.match(styles, /\.window-layer\s*\{/);
   assert.match(styles, /\.app-window\.is-active/);
+  assert.match(styles, /\.desktop-status-widget/);
+  assert.match(styles, /\.launcher-quick-list/);
+  assert.match(styles, /prefers-reduced-motion:reduce/);
 
   const appDefinitionSource = app.slice(app.indexOf('const appDefinitions = {'), app.indexOf('const mediaExtensions ='));
   const definitions = [...appDefinitionSource.matchAll(/\b([a-z]+): \{ name:/g)].map((match) => match[1]);

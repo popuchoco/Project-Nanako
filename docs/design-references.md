@@ -1,6 +1,6 @@
 # 介面與產品設計參考
 
-本文件記錄產品與介面層面的參考方向，**不是第三方套件清單**。目前只參考公開說明與展示內容，沒有複製或匯入這些專案的原始碼、圖片、圖示、字型或其他資產；因此不列入 `THIRD_PARTY.md`。
+本文件記錄產品與介面層面的參考方向，**不是第三方套件清單**。研究時會閱讀公開說明、展示及必要的程式碼結構，但沒有複製或匯入這些專案的原始碼、圖片、圖示、字型或其他資產；因此不列入 `THIRD_PARTY.md`。
 
 ## 參考方向
 
@@ -9,6 +9,13 @@
 - [VaultOS](https://github.com/justwaitfor-me/VaultOS)：僅列為家庭伺服器儀表板與個人儲存產品的概念參考。其公開 README 提到 Auth0 與雲端儲存等方向，但未說明檔案上鎖或靜態加密實作，因此不把它當成加密技術依據；Nanako 的加密空間仍須自行設計與測試。
 - [smbwebclient](https://github.com/vmvarela/smbwebclient)：參考以網頁介面管理 SMB 檔案瀏覽、上傳、下載、建立資料夾、刪除與重新命名的操作流程。這是連線至既有 SMB 分享的用戶端，不是 SMB 伺服器；Nanako 已有檔案管理器，不會為了這項參考另外採用 PHP、FrankenPHP 或 `icewind/smb`。
 - [Samba-Manager](https://github.com/lyarinet/Samba-Manager)：參考 SMB 管理介面可呈現的分享、使用者／群組權限、服務狀態、操作紀錄、輸入驗證與初始設定流程。該專案管理 Linux Samba；Nanako 是 Windows 專案，不直接套用它的 Samba 設定、Linux 指令或原始碼。
+- [chromeos/chromeos.dev](https://github.com/chromeos/chromeos.dev)：這是 ChromeOS 開發者網站，不是 ChromeOS 系統 UI 原始碼；僅供資訊導覽內容的參考。系統啟動與效能概念另參考 ChromiumOS 公開架構文件，整理於[作業體驗與效能檢視](performance-and-os-ux-review.md)。
+- [mozilla-b2g/B2G 與 Gaia](https://github.com/mozilla-b2g/B2G)：B2G 已封存、標示棄用，僅參考 Gaia System UI 的桌面外殼、視窗容器、延遲初始化概念；不把手機／Linux 平台程式碼帶入 Windows 專案。研究與 Nanako 的轉用決策記錄於[作業體驗與效能檢視](performance-and-os-ux-review.md)。
+- [OmaLauncher](https://github.com/SimonSchubert/omalauncher)：視覺參考其 Omarchy 主題、桌布、醒目的應用程式入口，以及主畫面與 App Drawer 的一致性。Nanako 已將桌面、狀態卡片與啟動器整理成同一組海岸藍／淺色視覺，不採用其 Android、Arch Linux／Wayland、Widget 語言或代理程式功能。
+- [HTCHome](https://github.com/mediaexplorer74/HTCHome)：Windows 10／11 上的 HTC Home 重製專案，可參考桌面資訊小工具與時鐘／狀態資訊的視覺整合。Nanako 桌面已加入僅顯示本機時間、可用資料空間數量與本機服務狀態的小工具；不照搬天氣服務或外部資料來源。該專案自述仍在緩慢開發，僅視為概念參考。
+- [PieLauncher](https://github.com/markusfisch/PieLauncher)：以動態圓形選單取代密集圖示表格，強調少數常用入口的快速辨識。Nanako 將其快速選取概念轉為啟動器內固定的「快速啟動」列，再保留完整應用程式清單；目前不採用環形選單，以免把手勢或拖曳變成必要操作，並確保鍵盤與一般清單仍是完整替代方式。
+
+上述三項僅作風格／互動概念參考，沒有複製程式碼、圖像或其他資產；不列入 `THIRD_PARTY.md`。對應的 Nanako 實作與取捨見[介面設計](design.md)及[桌面互動體驗規劃](ux-interaction-plan.md)。
 
 ## 檔案去重與空間整理
 

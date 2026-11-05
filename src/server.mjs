@@ -457,7 +457,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     const target = (value) => String(value || '').replace(/[\r\n\0]/gu, ' ').slice(0, 512);
     if (method === 'GET' && route === '/api/files') return { action: '瀏覽資料夾', target: target(url.searchParams.get('path') || '主資料夾') };
     if (method === 'GET' && route === '/api/files/search') {
-      const categories = { image: '圖片', video: '影片', audio: '音訊', document: '文件' };
+      const categories = { image: '圖片', video: '影片', audio: '音訊', document: '文件', media: '影音' };
       return { action: '搜尋資料空間分類', target: categories[url.searchParams.get('category')] || '檔案分類' };
     }
     if (method === 'GET' && route === '/api/preview') return { action: '開啟媒體預覽', target: target(url.searchParams.get('path')) };

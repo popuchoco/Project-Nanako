@@ -49,6 +49,15 @@
         <button class="desktop-icon" data-open-view="duplicates" type="button"><span class="desktop-icon-art duplicate-art" aria-hidden="true">⧉</span><span>檔案去重</span></button>
       </div>
 
+      <aside class="desktop-status-widget" aria-label="Nanako 本機狀態">
+        <div class="desktop-widget-heading"><span>Nanako 桌面</span><span class="widget-online"><i class="status-dot" aria-hidden="true"></i>本機運作中</span></div>
+        <time id="desktop-widget-time" class="desktop-widget-time"></time>
+        <p id="desktop-widget-date" class="desktop-widget-date"></p>
+        <div class="desktop-widget-rule" aria-hidden="true"></div>
+        <div class="desktop-widget-storage"><span>可用資料空間</span><strong id="desktop-widget-share-count">讀取中</strong></div>
+        <div class="desktop-widget-footer"><span>內容僅存於 NanakoData</span><button class="widget-link" data-open-view="computer" type="button">查看儲存空間 <span aria-hidden="true">→</span></button></div>
+      </aside>
+
       <div id="window-layer" class="window-layer" aria-label="Nanako 應用程式視窗"></div>
       <template id="app-window-template">
         <section class="app-window" role="region">
@@ -89,6 +98,7 @@
         <div class="file-controls"><label class="field-inline">資料空間<select id="share-select" aria-label="選擇 Nanako 資料空間"></select></label><div id="breadcrumb" class="breadcrumb" aria-label="目前路徑"></div><label class="file-search"><span class="sr-only">搜尋目前資料夾中的檔案名稱</span><input id="file-search" type="search" placeholder="搜尋目前資料夾" aria-label="搜尋目前資料夾中的檔案名稱" maxlength="180"></label><label class="file-sort"><span class="sr-only">排序檔案</span><select id="file-sort" aria-label="排序檔案"><option value="name-asc">名稱 A 到 Z</option><option value="name-desc">名稱 Z 到 A</option><option value="modified-desc">最近修改</option><option value="modified-asc">最早修改</option><option value="size-desc">大小由大到小</option><option value="size-asc">大小由小到大</option></select></label></div>
         <div id="file-batch-toolbar" class="file-batch-toolbar" aria-label="批次檔案操作"><span id="selected-file-count" aria-live="polite">尚未選取項目</span><div class="toolbar"><button id="batch-move" class="button secondary" type="button" disabled>批次移動</button><button id="batch-copy" class="button secondary" type="button" disabled>批次複製</button><button id="batch-delete" class="button secondary danger-outline" type="button" disabled>批次移至回收桶</button></div></div>
         <div class="table-wrap"><table><thead><tr><th scope="col" class="file-select-column"><input id="select-all-files" type="checkbox" aria-label="選取目前資料夾的所有項目"></th><th scope="col">名稱</th><th scope="col">修改時間</th><th scope="col">大小</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead><tbody id="file-list"></tbody></table><div id="empty-files" class="empty-state" hidden><strong>這裡還沒有檔案</strong><span>可以上傳檔案，或先新增資料夾。</span></div></div>
+        <button id="file-more" class="button secondary media-more" type="button" hidden>載入更多項目</button>
         <p id="file-message" class="inline-message" role="status" hidden></p>
         </div>
       </section>
@@ -112,15 +122,18 @@
       </section>
 
       <section id="view-album" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>相簿</h2><p class="muted">瀏覽目前資料夾中的圖片；選取圖片可放大檢視。</p></div></div>
-        <div class="file-controls"><label class="field-inline">分享資料夾<select id="album-share-select" aria-label="選擇相簿分享資料夾"></select></label><div id="album-breadcrumb" class="breadcrumb" aria-label="相簿目前路徑"></div></div>
+        <div class="content-heading"><div><h2>相簿</h2><p id="album-scope-note" class="muted">瀏覽目前 Nanako 資料空間中的圖片；選取圖片可放大檢視。</p></div></div>
+        <div class="file-controls media-library-controls"><label class="field-inline">資料空間<select id="album-share-select" aria-label="選擇相簿資料空間"></select></label><div id="album-breadcrumb" class="breadcrumb" aria-label="相簿目前路徑"></div><label class="file-search"><span class="sr-only">依圖片檔名搜尋</span><input id="album-search" type="search" placeholder="搜尋圖片檔名" aria-label="依圖片檔名搜尋" maxlength="180"></label><button id="album-scope-toggle" class="button secondary" type="button">依資料夾瀏覽</button></div>
+        <p id="album-catalog-message" class="inline-message" role="status" aria-live="polite" hidden></p>
         <div id="album-grid" class="album-grid" aria-label="圖片清單"></div>
-        <div id="empty-album" class="empty-state" hidden><strong>這個資料夾沒有圖片</strong><span>支援 JPG、PNG、GIF、WebP、AVIF 與 BMP。</span></div>
+        <button id="album-more" class="button secondary media-more" type="button" hidden>載入更多圖片</button>
+        <div id="empty-album" class="empty-state" aria-live="polite" hidden><strong>這個資料夾沒有圖片</strong><span>支援 JPG、PNG、GIF、WebP、AVIF 與 BMP。</span></div>
       </section>
 
       <section id="view-player" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>播放器</h2><p class="muted">播放目前資料夾中瀏覽器支援的音訊與影片格式。</p></div></div>
-        <div class="file-controls"><label class="field-inline">資料空間<select id="player-share-select" aria-label="選擇播放器資料空間"></select></label><div id="player-breadcrumb" class="breadcrumb" aria-label="播放器目前路徑"></div></div>
+        <div class="content-heading"><div><h2>播放器</h2><p id="player-scope-note" class="muted">播放目前 Nanako 資料空間中瀏覽器支援的音訊與影片格式。</p></div></div>
+        <div class="file-controls media-library-controls"><label class="field-inline">資料空間<select id="player-share-select" aria-label="選擇播放器資料空間"></select></label><div id="player-breadcrumb" class="breadcrumb" aria-label="播放器目前路徑"></div><label class="file-search"><span class="sr-only">依影音檔名搜尋播放清單</span><input id="player-search" type="search" placeholder="搜尋影音檔名" aria-label="依影音檔名搜尋播放清單" maxlength="180"></label><button id="player-scope-toggle" class="button secondary" type="button">依資料夾瀏覽</button></div>
+        <p id="player-catalog-message" class="inline-message" role="status" aria-live="polite" hidden></p>
         <div class="media-player-layout">
           <section class="card player-stage" aria-label="媒體播放區">
             <p id="current-media-name" class="current-media-name">尚未選取媒體</p>
@@ -129,7 +142,7 @@
             <p id="player-placeholder" class="player-placeholder">從右側清單選擇音訊或影片開始播放。</p>
             <p id="player-message" class="inline-message" role="status" hidden></p>
           </section>
-          <section class="card queue-card"><h3>播放清單</h3><div id="player-queue" class="player-queue"></div><div id="empty-player" class="empty-state" hidden><strong>沒有可播放的媒體</strong><span>支援 MP4、WebM、MP3、M4A、WAV、OGG、Opus 與 FLAC 等格式；實際播放能力依瀏覽器與編碼格式而異。</span></div></section>
+          <section class="card queue-card"><h3>播放清單</h3><div id="player-queue" class="player-queue"></div><button id="player-more" class="button secondary media-more" type="button" hidden>載入更多影音</button><div id="empty-player" class="empty-state" aria-live="polite" hidden><strong>沒有可播放的媒體</strong><span>支援 MP4、WebM、MP3、M4A、WAV、OGG、Opus 與 FLAC 等格式；實際播放能力依瀏覽器與編碼格式而異。</span></div></section>
         </div>
         <section class="card compatibility-card" aria-labelledby="compatibility-title">
           <div class="content-heading"><div><h3 id="compatibility-title">影音格式相容性</h3><p class="muted">格式提示僅供參考。選取實際影音檔並執行播放測試，才能確認這台電腦的 Electron 執行環境是否能解碼。</p></div></div>
@@ -204,6 +217,14 @@
 
       <section id="launcher-menu" class="launcher-menu" aria-label="應用程式選單" hidden>
         <div class="launcher-heading"><span class="nanako-mark" aria-hidden="true">N</span><div><strong>Nanako 應用程式</strong><small>本機檔案空間</small></div><button id="change-password-button" class="button ghost" type="button">變更密碼</button><button id="logout-button" class="button ghost" type="button">登出</button></div>
+        <section class="launcher-quick-access" aria-labelledby="launcher-quick-title">
+          <h2 id="launcher-quick-title">快速啟動</h2>
+          <div class="launcher-quick-list">
+            <button type="button" data-open-view="files"><span class="launcher-quick-glyph folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
+            <button type="button" data-open-view="album"><span class="launcher-quick-glyph album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>
+            <button type="button" data-open-view="player"><span class="launcher-quick-glyph player-art" aria-hidden="true">▶</span>播放器</button>
+          </div>
+        </section>
         <div class="launcher-grid">
           <button data-open-view="files" type="button"><span class="launcher-icon folder-art" aria-hidden="true"><span></span></span>檔案管理</button>
           <button data-open-view="album" type="button"><span class="launcher-icon album-art" aria-hidden="true"><span></span><i></i></span>相簿</button>

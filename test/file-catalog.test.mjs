@@ -68,3 +68,14 @@ test('category catalog validates query and category', async () => {
     await assert.rejects(searchManagedFiles({ root, category: 'image', search: 'x'.repeat(181) }), { code: 'search_query_too_long', status: 400 });
   });
 });
+
+test('media catalog returns audio and video while excluding unrelated documents', async () => {
+  await withRoot(async ({ root }) => {
+    await mkdir(path.join(root, '巢狀'));
+    await writeFile(path.join(root, '巢狀', '影片.mp4'), 'video');
+    await writeFile(path.join(root, '巢狀', '音樂.mp3'), 'audio');
+    await writeFile(path.join(root, '巢狀', '說明.txt'), 'document');
+    const result = await searchManagedFiles({ root, category: 'media' });
+    assert.deepEqual(result.items.map((item) => item.path), ['巢狀/音樂.mp3', '巢狀/影片.mp4']);
+  });
+});
