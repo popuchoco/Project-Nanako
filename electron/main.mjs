@@ -1,5 +1,5 @@
-import { app, BrowserWindow } from 'electron';
-import { lstatSync, mkdirSync } from 'node:fs';
+import { app, BrowserWindow, Menu, nativeImage, Tray } from 'electron';
+import { lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -31,13 +31,55 @@ app.setPath('userData', path.join(appDataDirectory, 'profile'));
 app.setPath('sessionData', path.join(appDataDirectory, 'session'));
 const dataDirectory = path.join(appDataDirectory, 'data');
 const compatibilityTest = process.argv.includes('--media-compatibility-test');
+const traySmokeTest = process.argv.includes('--tray-smoke-test');
 if (compatibilityTest) app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let service;
 let windowRef;
+let trayRef;
+let windowCreation;
 let closing = false;
 
+const smokeTest = process.env.NANAKO_DESKTOP_SMOKE_TEST === '1';
+
+function showWindow() {
+  if (!windowRef || windowRef.isDestroyed()) {
+    void createWindow();
+    return;
+  }
+  if (windowRef.isMinimized()) windowRef.restore();
+  windowRef.show();
+  windowRef.focus();
+}
+
+function createTray() {
+  if (smokeTest || trayRef) return;
+  const icon = nativeImage.createFromBuffer(readFileSync(path.join(currentDir, 'assets', 'nanako-tray.png')))
+    .resize({ width: 32, height: 32 });
+  if (icon.isEmpty()) throw new Error('Nanako 系統匣圖示無法載入。');
+  trayRef = new Tray(icon);
+  trayRef.setToolTip('Project Nanako｜本機檔案空間');
+  trayRef.setContextMenu(Menu.buildFromTemplate([
+    { label: '開啟 Nanako', click: showWindow },
+    { type: 'separator' },
+    { label: '退出 Nanako', click: () => app.quit() },
+  ]));
+  trayRef.on('click', showWindow);
+  trayRef.on('double-click', showWindow);
+}
+
 async function createWindow() {
+  if (windowRef && !windowRef.isDestroyed()) {
+    showWindow();
+    return;
+  }
+  if (windowCreation) return windowCreation;
+  windowCreation = createWindowInstance();
+  try { await windowCreation; }
+  finally { windowCreation = null; }
+}
+
+async function createWindowInstance() {
   service ??= await startServer({
     dataDir: dataDirectory,
     storageRoot: appDataDirectory,
@@ -63,8 +105,14 @@ async function createWindow() {
   windowRef.webContents.on('will-navigate', (event, target) => {
     if (!target.startsWith(`${origin}/`)) event.preventDefault();
   });
-  await windowRef.loadURL(origin);
+  windowRef.on('close', (event) => {
+    if (!closing && !smokeTest && trayRef) {
+      event.preventDefault();
+      windowRef.hide();
+    }
+  });
   windowRef.on('closed', () => { windowRef = null; });
+  await windowRef.loadURL(origin);
 }
 
 async function runMediaCompatibilityTest() {
@@ -98,8 +146,29 @@ async function runMediaCompatibilityTest() {
   }
 }
 
-app.whenReady().then(() => compatibilityTest ? runMediaCompatibilityTest() : createWindow()).catch((error) => {
+async function runTraySmokeTest() {
+  createTray();
+  await createWindow();
+  windowRef.close();
+  const hiddenToTray = !windowRef.isVisible() && !windowRef.isDestroyed();
+  showWindow();
+  if (!trayRef || trayRef.isDestroyed() || !hiddenToTray || !windowRef.isVisible()) {
+    throw new Error('系統匣圖示或視窗還原流程未成功。');
+  }
+  const report = { trayCreated: true, closeHidesToTray: hiddenToTray, windowRestored: true };
+  await writeFile(path.join(appDataDirectory, 'tray-smoke-report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report));
+  app.quit();
+}
+
+app.whenReady().then(async () => {
+  if (compatibilityTest) return runMediaCompatibilityTest();
+  if (traySmokeTest) return runTraySmokeTest();
+  createTray();
+  return createWindow();
+}).catch((error) => {
   console.error('Nanako 啟動失敗。', error);
+  if (traySmokeTest) { app.exit(2); return; }
   app.quit();
 });
 

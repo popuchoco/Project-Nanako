@@ -12,9 +12,10 @@ Project Nanako 是基於 Electron 的 Windows 桌面延伸作品，提供軟體�
 
 ```text
 Electron 主程序
-  ├─ 建立 BrowserWindow（隔離環境、停用 Node 整合）
+  ├─ 建立系統匣選單與 BrowserWindow（隔離環境、停用 Node 整合）
   ├─ 啟動同一程序內的 Node.js HTTP 服務
-  └─ 關閉視窗時關閉服務與 SQLite
+  ├─ 關閉主視窗時隱藏到系統匣；使用者明確退出時關閉服務與 SQLite
+  └─ 系統匣點擊可還原視窗，退出命令停止服務
           │ HTTP，127.0.0.1 隨機連接埠
           ▼
 Renderer（public/） ─── /api/* ───► HTTP 路由與驗證／授權
@@ -24,7 +25,7 @@ Renderer（public/） ─── /api/* ───► HTTP 路由與驗證／授�
 
 Renderer 的外層以 Nanako 內部桌面呈現捷徑、應用程式入口與本機狀態；應用程式視窗由共用 HTML 範本動態建立，每個應用程式各有一個獨立視窗，並以視窗 Map 管理開啟／最小化狀態、作用中視窗與 z-order。工作列與 Dock 會同步呈現視窗；支援拖曳、方向鍵移動、最小化、最大化／還原、關閉及從工作列還原。視窗生命週期操作會透過本機 `/api/activity` 記錄。功能面板開啟時由隱藏的內容 bank 移入該應用程式視窗，關閉時移回，既有檔案資料操作仍由同一組本機 API 及權限檢查處理。這是應用程式自己的 UI，不會呼叫 Windows Shell。完整操作規則見[桌面互動體驗規劃](ux-interaction-plan.md)。檔案管理支援重新命名、移動、串流複製與逐項批次操作；複製會使用 Nanako 受管理目錄中的隱藏暫存項目，完成後才發布至目的地。重複檔案功能以 Node.js 內建 `crypto` 串流計算 SHA-256，並在確認後將副本移至同一個 Nanako 資料空間的資源回收桶。一般檔案 ZIP 支援串流建立／解壓、進度／取消及暫存復原。加密空間為本機功能原型：只有明確移入的檔案才會轉成 `.nanako-vault` 密文物件，其他 Nanako 檔案仍為一般檔案；備份也只留在同一個 NanakoData，不是異地備份。
 
-- `electron/main.mjs`：桌面生命週期、視窗安全設定、啟停 HTTP 服務。
+- `electron/main.mjs`：桌面生命週期、系統匣、視窗安全設定、啟停 HTTP 服務；桌面煙霧測試模式略過系統匣並保留可自動關閉行為。
 - `src/server.mjs`：本機 HTTP API、登入、權限檢查、操作紀錄、檔案／資源回收桶／ZIP 作業、靜態檔案。
 - `src/archives.mjs`：限制 NanakoData 路徑範圍的 ZIP 串流建立與解壓縮、中央目錄／路徑／CRC／大小驗證。
 - `src/vault-crypto.mjs`：scrypt master-key 包覆、HKDF 物件金鑰派生、AES-256-GCM 區塊串流及加密中繼資料原型；金鑰只由 Node.js 主程序使用。

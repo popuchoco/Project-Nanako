@@ -19,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: 1.95.0
       - name: Check out the pinned candidate revision
         shell: pwsh
         run: |

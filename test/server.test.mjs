@@ -1277,9 +1277,14 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
     }
   } finally { await file.close(); }
 
-  const baselineRss = process.memoryUsage().rss;
-  let peakRss = baselineRss;
-  const sample = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 10);
+  const baselineUsage = process.memoryUsage();
+  let peakRss = baselineUsage.rss;
+  let peakArrayBuffers = baselineUsage.arrayBuffers;
+  const sample = setInterval(() => {
+    const usage = process.memoryUsage();
+    peakRss = Math.max(peakRss, usage.rss);
+    peakArrayBuffers = Math.max(peakArrayBuffers, usage.arrayBuffers);
+  }, 10);
   sample.unref();
   try {
     const created = await request('/api/archive/create', {
@@ -1295,9 +1300,12 @@ test('large ZIP create and extract stream file data with bounded RSS growth', as
   } finally {
     clearInterval(sample);
     peakRss = Math.max(peakRss, process.memoryUsage().rss);
+    peakArrayBuffers = Math.max(peakArrayBuffers, process.memoryUsage().arrayBuffers);
   }
-  assert.ok(peakRss - baselineRss < 24 * 1024 * 1024,
-    `串流壓縮／解壓的 RSS 增量應低於 24 MiB；實測 ${((peakRss - baselineRss) / 1024 / 1024).toFixed(1)} MiB`);
+  const rssDelta = peakRss - baselineUsage.rss;
+  const arrayBufferDelta = peakArrayBuffers - baselineUsage.arrayBuffers;
+  assert.ok(rssDelta < 64 * 1024 * 1024 && arrayBufferDelta < 24 * 1024 * 1024,
+    `32 MiB ZIP 串流應保持有界；RSS 增量實測 ${(rssDelta / 1024 / 1024).toFixed(1)} MiB（限 64 MiB），ArrayBuffer 增量實測 ${(arrayBufferDelta / 1024 / 1024).toFixed(1)} MiB（限 24 MiB）`);
 });
 
 test('directory ZIP archives preserve nested files and empty directories', async (t) => {

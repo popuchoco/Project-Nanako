@@ -29,9 +29,19 @@ jobs:
           if ($artifacts.Count -ne 1) {
             throw 'The packaged Windows x64 portable executable was not produced.'
           }
-          & $artifacts[0].FullName --media-compatibility-test
-          if ($LASTEXITCODE -ne 0) { throw 'The packaged media compatibility harness failed.' }
+          $mediaTest = Start-Process -FilePath $artifacts[0].FullName -ArgumentList '--media-compatibility-test' -Wait -PassThru -WindowStyle Hidden
+          if ($mediaTest.ExitCode -ne 0) { throw 'The packaged media compatibility harness failed.' }
           $report = Join-Path (Get-Location).Path 'dist\NanakoData\media-compatibility-report.json'
           if (-not (Test-Path -LiteralPath $report -PathType Leaf)) {
             throw 'The packaged media compatibility report was not produced.'
+          }
+          $trayTest = Start-Process -FilePath $artifacts[0].FullName -ArgumentList '--tray-smoke-test' -Wait -PassThru -WindowStyle Hidden
+          if ($trayTest.ExitCode -ne 0) { throw 'The packaged system tray smoke test failed.' }
+          $trayReport = Join-Path (Get-Location).Path 'dist\NanakoData\tray-smoke-report.json'
+          if (-not (Test-Path -LiteralPath $trayReport -PathType Leaf)) {
+            throw 'The packaged system tray smoke report was not produced.'
+          }
+          $trayResult = Get-Content -LiteralPath $trayReport -Raw | ConvertFrom-Json
+          if (-not $trayResult.trayCreated -or -not $trayResult.closeHidesToTray -or -not $trayResult.windowRestored) {
+            throw 'The packaged system tray smoke report indicates a failed check.'
           }
