@@ -1357,6 +1357,66 @@ test('ZIP CRC corruption is rejected and leaves no partial extraction directory'
   assert.ok(!entries.some((name) => name.startsWith('.localnas-extract-')));
 });
 
+test('ZIP exact duplicate entry names surface archive_path_conflict on extract', async (t) => {
+  const { dataDir, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const shareRoot = path.join(dataDir, 'files', shareId);
+  // Two stored central entries with identical raw names (ZipWriter normalizes duplicates away).
+  function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+  function storedEntry(name, data) {
+    const nameBytes = Buffer.from(name, 'utf8');
+    const payload = Buffer.from(data);
+    const checksum = crc32(payload);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(payload.length, 18);
+    local.writeUInt32LE(payload.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x0800, 8);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(payload.length, 20);
+    central.writeUInt32LE(payload.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    return { local: Buffer.concat([local, nameBytes, payload]), central: Buffer.concat([central, nameBytes]), size: local.length + nameBytes.length + payload.length };
+  }
+  const first = storedEntry('same.txt', 'one');
+  const second = storedEntry('same.txt', 'two');
+  second.central.writeUInt32LE(first.size, 42);
+  const centralDirectory = Buffer.concat([first.central, second.central]);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(2, 8);
+  eocd.writeUInt16LE(2, 10);
+  eocd.writeUInt32LE(centralDirectory.length, 12);
+  eocd.writeUInt32LE(first.size + second.size, 16);
+  await writeFile(path.join(shareRoot, 'duplicates.zip'), Buffer.concat([first.local, second.local, centralDirectory, eocd]));
+
+  const result = await request('/api/archive/extract', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shareId, path: 'duplicates.zip' }),
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, 'archive_path_conflict');
+  assert.equal(result.body.message, 'ZIP 內含重複或大小寫衝突的路徑。');
+  assert.equal(await readFile(path.join(shareRoot, 'duplicates', 'same.txt')).catch(() => null), null);
+  const entries = await readdir(shareRoot);
+  assert.ok(!entries.some((name) => name.startsWith('.localnas-extract-')));
+});
+
 test('ZIP progress is observable and cancellation removes staging data without changing the source', async (t) => {
   const { dataDir, request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();

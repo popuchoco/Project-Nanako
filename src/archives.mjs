@@ -193,6 +193,31 @@ async function preflightCentralDirectory(archivePath, archiveSize) {
     if (entries > MAX_ENTRIES || centralSize > MAX_CENTRAL_DIRECTORY_BYTES || centralOffset + centralSize > eocdOffset) {
       throw archiveError(413, 'archive_limit_exceeded', 'ZIP 項目數或中央目錄大小超過上限。');
     }
+    const centralDirectory = Buffer.alloc(centralSize);
+    let bytesRead = 0;
+    while (bytesRead < centralSize) {
+      const result = await handle.read(centralDirectory, bytesRead, centralSize - bytesRead, centralOffset + bytesRead);
+      if (!result.bytesRead) break;
+      bytesRead += result.bytesRead;
+    }
+    if (bytesRead !== centralSize) throw archiveError(400, 'invalid_archive', 'ZIP 中央目錄不完整或檔案已損毀。');
+    const filenames = new Set();
+    let centralPosition = 0;
+    for (let index = 0; index < entries; index += 1) {
+      if (centralPosition + 46 > centralDirectory.length || centralDirectory.readUInt32LE(centralPosition) !== 0x02014b50) {
+        throw archiveError(400, 'invalid_archive', 'ZIP 中央目錄不完整或檔案已損毀。');
+      }
+      const filenameLength = centralDirectory.readUInt16LE(centralPosition + 28);
+      const extraLength = centralDirectory.readUInt16LE(centralPosition + 30);
+      const commentLength = centralDirectory.readUInt16LE(centralPosition + 32);
+      const filenameStart = centralPosition + 46;
+      const nextPosition = filenameStart + filenameLength + extraLength + commentLength;
+      if (nextPosition > centralDirectory.length) throw archiveError(400, 'invalid_archive', 'ZIP 中央目錄不完整或檔案已損毀。');
+      const filename = centralDirectory.subarray(filenameStart, filenameStart + filenameLength).toString('hex');
+      if (filenames.has(filename)) throw archiveError(400, 'archive_path_conflict', 'ZIP 內含重複或大小寫衝突的路徑。');
+      filenames.add(filename);
+      centralPosition = nextPosition;
+    }
     return entries;
   } finally {
     await handle.close();
