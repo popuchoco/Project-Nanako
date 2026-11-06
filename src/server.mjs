@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { Server as HttpsServer } from 'node:https';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, lstat, readFile, readdir, rename, rm, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -55,6 +56,20 @@ const MAX_DUPLICATE_SCAN_JOBS = 2;
 const MAX_DUPLICATE_SELECTIONS = 200;
 const MAX_DUPLICATE_CLEANUP_ITEMS = 1000;
 const MAX_PLAYBACK_PROGRESS_ITEMS = 500;
+
+function buildLoopbackOriginAllowlist(server) {
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Nanako 伺服器尚未繫結有效的本機位址。');
+  }
+  const scheme = server instanceof HttpsServer ? 'https' : 'http';
+  const port = address.port;
+  return new Set([
+    `${scheme}://127.0.0.1:${port}`,
+    `${scheme}://[::1]:${port}`,
+    `${scheme}://localhost:${port}`,
+  ]);
+}
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
@@ -892,6 +907,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
 
   let closed = false;
+  let allowedOrigins = new Set();
   const server = createServer(async (req, res) => {
     let auditEvent = null;
     let auditLogged = false;
@@ -915,7 +931,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       const method = req.method || 'GET';
       const route = url.pathname;
       const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-      if (mutating && req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+      // Browsers send Origin on cross-site mutating requests; same-site desktop/Electron and non-browser callers may omit it. This blocks mismatched Origins, not a missing Origin.
+      if (mutating && req.headers.origin && !allowedOrigins.has(req.headers.origin)) {
         throw fail(403, 'origin_denied', '來源不符。');
       }
 
@@ -2407,6 +2424,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     server.once('error', reject);
     server.listen(port, host, () => { server.off('error', reject); resolve(); });
   });
+  allowedOrigins = buildLoopbackOriginAllowlist(server);
 
   const auditPurgeTimer = setInterval(purgeExpiredAuditLogs, 60 * 60 * 1000);
   auditPurgeTimer.unref();

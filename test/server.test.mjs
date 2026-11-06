@@ -5,6 +5,7 @@ import path from 'node:path';
 import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
@@ -34,12 +35,91 @@ async function setupServer(t, options = {}) {
   return { base, dataDir, server, request, setup };
 }
 
+function requestRaw(port, pathname, { method = 'GET', headers = {}, body = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest({ hostname: '127.0.0.1', port, path: pathname, method, headers }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const responseBody = Buffer.concat(chunks).toString('utf8');
+        resolve({
+          response: { status: response.statusCode, headers: response.headers },
+          body: (response.headers['content-type'] || '').includes('application/json') ? JSON.parse(responseBody) : responseBody,
+        });
+      });
+    });
+    outgoing.once('error', reject);
+    outgoing.end(body);
+  });
+}
+
 test('renderer ES modules are served with a JavaScript MIME type', async (t) => {
   const { request } = await setupServer(t);
   const moduleFile = await request('/file-listing.mjs');
   assert.equal(moduleFile.response.status, 200);
   assert.match(moduleFile.response.headers.get('content-type'), /^text\/javascript\b/u);
   assert.match(moduleFile.body, /filterAndSortFiles/u);
+});
+
+test('mutating Origin checks use the bound loopback origin allowlist', async (t) => {
+  const { server, request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const port = server.port;
+  const authHeaders = { Cookie: cookie, 'Content-Type': 'application/json' };
+
+  for (const [index, origin] of [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    `http://[::1]:${port}`,
+  ].entries()) {
+    const allowed = await request('/api/folders', {
+      method: 'POST',
+      headers: { ...authHeaders, Origin: origin },
+      body: JSON.stringify({ shareId, path: '', name: `allowed-origin-${index}` }),
+    });
+    assert.equal(allowed.response.status, 201, `${origin} should be allowed`);
+  }
+
+  const missingOrigin = await request('/api/folders', {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({ shareId, path: '', name: 'missing-origin' }),
+  });
+  assert.equal(missingOrigin.response.status, 201);
+
+  for (const origin of [
+    `http://127.0.0.1:${port + 1}`,
+    `http://evil.example:${port}`,
+  ]) {
+    const rejected = await request('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+    });
+    assert.equal(rejected.response.status, 403, `${origin} should be rejected`);
+    assert.equal(rejected.body.error, 'origin_denied');
+  }
+
+  const spoofedHost = await requestRaw(port, '/api/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Host: 'evil.com',
+      Origin: 'http://evil.com',
+    },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(spoofedHost.response.status, 403);
+  assert.equal(spoofedHost.body.error, 'origin_denied');
+
+  const foreignOriginGet = await request('/api/setup-state', {
+    headers: { Origin: `http://evil.example:${port}` },
+  });
+  assert.equal(foreignOriginGet.response.status, 200);
+  const spoofedHostGet = await requestRaw(port, '/api/setup-state', {
+    headers: { Host: 'evil.com', Origin: 'http://evil.com' },
+  });
+  assert.equal(spoofedHostGet.response.status, 200);
 });
 
 test('setup, login, file transfer, recycle bin and restore work locally', async (t) => {
