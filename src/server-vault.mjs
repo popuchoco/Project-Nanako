@@ -7,6 +7,7 @@ import { finished, pipeline } from 'node:stream/promises';
 import { fail, json, mediaTypes, parseByteRange, readJson, writeResponseChunk } from './http-utils.mjs';
 import { rejectSymlinkTraversal, resolveShareInside, safeName } from './path-guards.mjs';
 import { hashManagedFile } from './duplicates.mjs';
+import { clearThrottle, getThrottle, recordFailure } from './throttle-store.mjs';
 import {
   copyVaultBackupObject,
   createVaultBackup,
@@ -29,14 +30,11 @@ import {
   unlockVaultWithRecoveryCode,
 } from './vault-crypto.mjs';
 
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const VAULT_UNLOCK_FAILURE_LIMIT = 5;
 const VAULT_IDLE_LOCK_MS = 15 * 60 * 1000;
 
 export function createVaultRouter(ctx) {
-  const { db, dataDir, withPathLocks, withPathLock, ensureManagedDirectory, requirePermission, shareRoot } = ctx;
+  const { db, dataDir, now = () => Date.now(), withPathLocks, withPathLock, ensureManagedDirectory, requirePermission, shareRoot } = ctx;
 
-    const vaultUnlockFailures = new Map();
     const unlockedVaultKeys = new Map();
     const activeVaultImports = new Map();
     const activeVaultOperations = new Map();
@@ -205,23 +203,12 @@ export function createVaultRouter(ctx) {
       return [...found.values()].sort((left, right) => left.id.localeCompare(right.id));
     }
     const vaultAttemptKey = (req, user) => `${req.socket.remoteAddress || 'local'}\0${user.id}`;
-    function assertVaultUnlockAllowed(key, now = Date.now()) {
-      if (vaultUnlockFailures.size > 2048) {
-        for (const [attemptKey, attempt] of vaultUnlockFailures) if (attempt.lockedUntil <= now && now - attempt.updatedAt > LOGIN_WINDOW_MS) vaultUnlockFailures.delete(attemptKey);
-      }
-      const attempt = vaultUnlockFailures.get(key);
-      if (attempt?.lockedUntil > now) throw fail(429, 'vault_unlock_throttled', '嘗試次數過多，請稍後再解鎖加密空間。');
-      if (attempt?.lockedUntil && attempt.lockedUntil <= now) vaultUnlockFailures.delete(key);
+    function assertVaultUnlockAllowed(key, timestamp = now()) {
+      const attempt = getThrottle(db, 'vault_unlock', key, timestamp);
+      if (attempt?.lockedUntil > timestamp) throw fail(429, 'vault_unlock_throttled', '嘗試次數過多，請稍後再解鎖加密空間。');
     }
-    function recordVaultUnlockFailure(key, now = Date.now()) {
-      const attempt = vaultUnlockFailures.get(key) || { count: 0, lockedUntil: 0, updatedAt: now };
-      attempt.count += 1;
-      attempt.updatedAt = now;
-      if (attempt.count >= VAULT_UNLOCK_FAILURE_LIMIT) {
-        attempt.count = 0;
-        attempt.lockedUntil = now + LOGIN_WINDOW_MS;
-      }
-      vaultUnlockFailures.set(key, attempt);
+    function recordVaultUnlockFailure(key, timestamp = now()) {
+      recordFailure(db, 'vault_unlock', key, timestamp);
     }
 
   function matchesVaultRoute(method, route) {
@@ -303,7 +290,7 @@ export function createVaultRouter(ctx) {
       }
       await lockVaultKey(user.id);
       setVaultKey(user.id, masterKey);
-      vaultUnlockFailures.delete(attemptKey);
+      clearThrottle(db, 'vault_unlock', attemptKey);
       return json(res, 200, { configured: true, unlocked: true });
     }
     if (route === '/api/vault/recover' && method === 'POST') {
@@ -326,7 +313,7 @@ export function createVaultRouter(ctx) {
       }
       await lockVaultKey(user.id);
       setVaultKey(user.id, masterKey);
-      vaultUnlockFailures.delete(attemptKey);
+      clearThrottle(db, 'vault_unlock', attemptKey);
       return json(res, 200, { configured: true, unlocked: true });
     }
     if (route === '/api/vault/recovery-key' && method === 'POST') {
