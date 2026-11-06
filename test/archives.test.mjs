@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { createArchive, extractArchive } from '../src/archives.mjs';
 
@@ -267,13 +267,19 @@ test('extractArchive accepts zero-length files and round-trips Unicode filenames
 
 test('extractArchive rejects exact duplicate filenames with archive_path_conflict', async (t) => {
   const shareRoot = await archiveFixture(t);
-  // zip.js rejects duplicate central names before validateEntries; the module currently maps that to invalid_archive.
   const archivePath = await writeZip(shareRoot, 'duplicates.zip', makeZip([
     { name: 'same.txt', data: 'one' }, { name: 'same.txt', data: 'two' },
   ]));
-  const error = await expectArchiveError(t, extractArchive({ archivePath, shareRoot, destinationPath: path.join(shareRoot, 'duplicates') }), 'archive_path_conflict', 'duplicate filenames');
-  if (!error) return;
-  assert.equal(error.message, 'ZIP 內含重複或大小寫衝突的路徑。');
+  const destinationPath = path.join(shareRoot, 'duplicates');
+  await assert.rejects(
+    extractArchive({ archivePath, shareRoot, destinationPath }),
+    (error) => {
+      assert.equal(error.code, 'archive_path_conflict');
+      assert.equal(error.message, 'ZIP 內含重複或大小寫衝突的路徑。');
+      return true;
+    },
+  );
+  await assert.rejects(lstat(destinationPath), { code: 'ENOENT' });
   await assertNoArchiveTemps(shareRoot);
 });
 
