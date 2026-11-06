@@ -64,11 +64,67 @@ function buildLoopbackOriginAllowlist(server) {
   }
   const scheme = server instanceof HttpsServer ? 'https' : 'http';
   const port = address.port;
-  return new Set([
-    `${scheme}://127.0.0.1:${port}`,
-    `${scheme}://[::1]:${port}`,
-    `${scheme}://localhost:${port}`,
-  ]);
+  return {
+    origins: new Set([
+      `${scheme}://127.0.0.1:${port}`,
+      `${scheme}://localhost:${port}`,
+      `${scheme}://[::1]:${port}`,
+    ]),
+    hosts: new Set([
+      `127.0.0.1:${port}`,
+      `localhost:${port}`,
+      `[::1]:${port}`,
+    ]),
+  };
+}
+
+function parseIpv4(address) {
+  const parts = address.split('.');
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/u.test(part))) return null;
+  const octets = parts.map(Number);
+  if (octets.some((part) => part > 255)) return null;
+  return octets;
+}
+
+function parseIpv6(address) {
+  let value = address.toLowerCase().split('%', 1)[0];
+  if (value.includes('.')) {
+    const ipv4Start = value.lastIndexOf(':') + 1;
+    const ipv4 = parseIpv4(value.slice(ipv4Start));
+    if (ipv4Start === 0 || !ipv4) return null;
+    const first = ((ipv4[0] << 8) | ipv4[1]).toString(16);
+    const second = ((ipv4[2] << 8) | ipv4[3]).toString(16);
+    value = `${value.slice(0, ipv4Start)}${first}:${second}`;
+  }
+
+  const compression = value.indexOf('::');
+  if (compression !== -1 && compression !== value.lastIndexOf('::')) return null;
+  let words;
+  if (compression === -1) {
+    words = value.split(':');
+    if (words.length !== 8) return null;
+  } else {
+    const left = value.slice(0, compression).split(':').filter(Boolean);
+    const right = value.slice(compression + 2).split(':').filter(Boolean);
+    const zeroCount = 8 - left.length - right.length;
+    if (zeroCount < 1) return null;
+    words = [...left, ...Array(zeroCount).fill('0'), ...right];
+  }
+  if (words.length !== 8 || words.some((word) => !/^[0-9a-f]{1,4}$/u.test(word))) return null;
+  return words.map((word) => Number.parseInt(word, 16));
+}
+
+function isLoopbackAddress(address) {
+  if (typeof address !== 'string') return false;
+  const ipv4 = parseIpv4(address);
+  if (ipv4) return ipv4[0] === 127;
+
+  const words = parseIpv6(address);
+  if (!words) return false;
+  if (words.slice(0, 7).every((word) => word === 0) && words[7] === 1) return true;
+  return words.slice(0, 5).every((word) => word === 0)
+    && words[5] === 0xffff
+    && (words[6] >> 8) === 127;
 }
 
 const mimeTypes = new Map([
@@ -391,6 +447,12 @@ function initDatabase(dataDir) {
   `);
   const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
   if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+  const adminCount = Number(db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n);
+  if (adminCount <= 1) {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_single_admin_idx ON users(role) WHERE role = 'admin'");
+  } else {
+    console.error(`資料庫中有 ${adminCount} 位管理員，略過單一管理員索引建立。`);
+  }
   const vaultColumns = new Set(db.prepare('PRAGMA table_info(vaults)').all().map((column) => column.name));
   if (!vaultColumns.has('recovery_json')) db.exec('ALTER TABLE vaults ADD COLUMN recovery_json TEXT');
   const vaultObjectColumns = new Set(db.prepare('PRAGMA table_info(vault_objects)').all().map((column) => column.name));
@@ -908,6 +970,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
 
   let closed = false;
   let allowedOrigins = new Set();
+  let allowedHosts = new Set();
   const server = createServer(async (req, res) => {
     let auditEvent = null;
     let auditLogged = false;
@@ -927,13 +990,21 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     try {
-      const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+        throw fail(403, 'remote_denied', '僅允許本機連線。');
+      }
+      const hostHeader = req.headers.host;
+      if (typeof hostHeader !== 'string' || !allowedHosts.has(hostHeader)) {
+        throw fail(403, 'host_denied', '主機名稱不符。');
+      }
+      const scheme = server instanceof HttpsServer ? 'https' : 'http';
+      const url = new URL(req.url, `${scheme}://${hostHeader}`);
       const method = req.method || 'GET';
       const route = url.pathname;
       const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-      // Browsers send Origin on cross-site mutating requests; same-site desktop/Electron and non-browser callers may omit it. This blocks mismatched Origins, not a missing Origin.
-      if (mutating && req.headers.origin && !allowedOrigins.has(req.headers.origin)) {
-        throw fail(403, 'origin_denied', '來源不符。');
+      // Electron uses the loopback URL and same-origin fetch, so Chromium sends Origin on its POST requests.
+      if (mutating && (typeof req.headers.origin !== 'string' || req.headers.origin.length === 0 || !allowedOrigins.has(req.headers.origin))) {
+        throw fail(403, 'origin_denied', '來源不符或缺少來源資訊。');
       }
 
       if (route.startsWith('/api/')) {
@@ -949,16 +1020,26 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           const userId = crypto.randomUUID();
           const shareId = crypto.randomUUID();
           const now = new Date().toISOString();
-          db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-            .run(userId, username, pass.salt, pass.hash, 'admin', now);
-          db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', now);
-          db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
+          const token = crypto.randomBytes(32).toString('base64url');
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) {
+              throw fail(409, 'already_setup', '已完成初始設定。');
+            }
+            db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
+              .run(userId, username, pass.salt, pass.hash, 'admin', now);
+            db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', now);
+            db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
+            db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_SECONDS * 1000);
+            db.exec('COMMIT');
+          } catch (error) {
+            try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
+            throw error;
+          }
           const newShareRoot = path.join(dataDir, 'files', shareId);
           await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot, false);
           await mkdir(newShareRoot);
           await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot);
-          const token = crypto.randomBytes(32).toString('base64url');
-          db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_SECONDS * 1000);
           return json(res, 201, { user: getUserById.get(userId) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
         }
         if (route === '/api/login' && method === 'POST') {
@@ -2424,7 +2505,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     server.once('error', reject);
     server.listen(port, host, () => { server.off('error', reject); resolve(); });
   });
-  allowedOrigins = buildLoopbackOriginAllowlist(server);
+  const allowlists = buildLoopbackOriginAllowlist(server);
+  allowedOrigins = allowlists.origins;
+  allowedHosts = allowlists.hosts;
 
   const auditPurgeTimer = setInterval(purgeExpiredAuditLogs, 60 * 60 * 1000);
   auditPurgeTimer.unref();

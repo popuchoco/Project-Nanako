@@ -20,7 +20,11 @@ async function setupServer(t, options = {}) {
   t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.port}`;
   async function request(url, options = {}) {
-    const response = await fetch(`${base}${url}`, { ...options, redirect: 'manual' });
+    const { omitOrigin = false, ...fetchOptions } = options;
+    const method = String(fetchOptions.method || 'GET').toUpperCase();
+    const headers = new Headers(fetchOptions.headers || {});
+    if (!omitOrigin && !['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers.has('origin')) headers.set('Origin', base);
+    const response = await fetch(`${base}${url}`, { ...fetchOptions, headers, redirect: 'manual' });
     const contentType = response.headers.get('content-type') || '';
     const body = contentType.includes('application/json') ? await response.json() : await response.text();
     return { response, body };
@@ -61,7 +65,7 @@ test('renderer ES modules are served with a JavaScript MIME type', async (t) => 
   assert.match(moduleFile.body, /filterAndSortFiles/u);
 });
 
-test('mutating Origin checks use the bound loopback origin allowlist', async (t) => {
+test('requests require a loopback peer, bound Host, and allowed Origin for mutations', async (t) => {
   const { server, request, setup } = await setupServer(t);
   const { cookie, shareId } = await setup();
   const port = server.port;
@@ -80,12 +84,35 @@ test('mutating Origin checks use the bound loopback origin allowlist', async (t)
     assert.equal(allowed.response.status, 201, `${origin} should be allowed`);
   }
 
+  for (const [index, hostHeader] of [`localhost:${port}`, `[::1]:${port}`].entries()) {
+    const allowedHost = await requestRaw(port, '/api/folders', {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        Host: hostHeader,
+        Origin: `http://${hostHeader}`,
+      },
+      body: JSON.stringify({ shareId, path: '', name: `allowed-host-${index}` }),
+    });
+    assert.equal(allowedHost.response.status, 201, `${hostHeader} should be allowed`);
+  }
+
   const missingOrigin = await request('/api/folders', {
     method: 'POST',
     headers: authHeaders,
+    omitOrigin: true,
     body: JSON.stringify({ shareId, path: '', name: 'missing-origin' }),
   });
-  assert.equal(missingOrigin.response.status, 201);
+  assert.equal(missingOrigin.response.status, 403);
+  assert.equal(missingOrigin.body.error, 'origin_denied');
+
+  const emptyOrigin = await request('/api/folders', {
+    method: 'POST',
+    headers: { ...authHeaders, Origin: '' },
+    body: JSON.stringify({ shareId, path: '', name: 'empty-origin' }),
+  });
+  assert.equal(emptyOrigin.response.status, 403);
+  assert.equal(emptyOrigin.body.error, 'origin_denied');
 
   for (const origin of [
     `http://127.0.0.1:${port + 1}`,
@@ -110,16 +137,39 @@ test('mutating Origin checks use the bound loopback origin allowlist', async (t)
     body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
   });
   assert.equal(spoofedHost.response.status, 403);
-  assert.equal(spoofedHost.body.error, 'origin_denied');
+  assert.equal(spoofedHost.body.error, 'host_denied');
 
   const foreignOriginGet = await request('/api/setup-state', {
     headers: { Origin: `http://evil.example:${port}` },
   });
   assert.equal(foreignOriginGet.response.status, 200);
-  const spoofedHostGet = await requestRaw(port, '/api/setup-state', {
-    headers: { Host: 'evil.com', Origin: 'http://evil.com' },
+  const invalidHostAlone = await requestRaw(port, '/api/setup-state', {
+    headers: { Host: 'evil.com' },
   });
-  assert.equal(spoofedHostGet.response.status, 200);
+  assert.equal(invalidHostAlone.response.status, 403);
+  assert.equal(invalidHostAlone.body.error, 'host_denied');
+
+  // This helper binds to 127.0.0.1, so a non-loopback remoteAddress cannot be injected reliably without a socket hack.
+});
+
+test('concurrent initial setup creates exactly one admin', async (t) => {
+  const { base, dataDir, request } = await setupServer(t);
+  const attempts = await Promise.all(['admin-one', 'admin-two'].map((username) => request('/api/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify({ username, password: 'local-test-passphrase-2026' }),
+  })));
+  const statuses = attempts.map(({ response }) => response.status).sort((a, b) => a - b);
+  assert.deepEqual(statuses, [201, 409]);
+  assert.equal(attempts.find(({ response }) => response.status === 409).body.error, 'already_setup');
+
+  const db = new DatabaseSync(path.join(dataDir, 'metadata.sqlite'), { readOnly: true });
+  try {
+    assert.equal(Number(db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n), 1);
+    assert.equal(Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n), 1);
+  } finally {
+    db.close();
+  }
 });
 
 test('setup, login, file transfer, recycle bin and restore work locally', async (t) => {
@@ -294,7 +344,7 @@ test('vault is locked again after server shutdown and restart', async (t) => {
   try {
     const restartedBase = `http://127.0.0.1:${restarted.port}`;
     const login = await fetch(`${restartedBase}/api/login`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: restartedBase },
       body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
     });
     assert.equal(login.status, 200);
@@ -658,7 +708,7 @@ test('pending vault import survives restart and recovery requires a fresh unlock
   try {
   const base = `http://127.0.0.1:${restarted.port}`;
   const login = await fetch(`${base}/api/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base },
     body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
   });
   assert.equal(login.status, 200);
@@ -670,7 +720,7 @@ test('pending vault import survives restart and recovery requires a fresh unlock
   assert.equal(lockedRecovery.status, 423);
   await lockedRecovery.text();
   const unlock = await fetch(`${base}/api/vault/unlock`, {
-    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json' },
+    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json', Origin: base },
     body: JSON.stringify({ password: 'vault-restart-recovery-2026' }),
   });
   assert.equal(unlock.status, 200);
@@ -679,7 +729,7 @@ test('pending vault import survives restart and recovery requires a fresh unlock
   const recoveryBody = await recovery.json();
   assert.equal(recoveryBody.items[0].sourceState, 'unchanged');
   const complete = await fetch(`${base}/api/vault/recovery/${imported.body.item.id}`, {
-    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json' },
+    method: 'POST', headers: { Cookie: restartedCookie, 'Content-Type': 'application/json', Origin: base },
     body: JSON.stringify({ action: 'complete' }),
   });
   assert.equal(complete.status, 200);
