@@ -31,13 +31,13 @@ import {
 } from './path-guards.mjs';
 import { readWindowsSmbStatus } from './windows-smb-status.mjs';
 import { isShareOperationAllowed } from './share-access.mjs';
+import { ensureThrottleSchema, pruneExpiredThrottles } from './throttle-store.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicRoot = path.join(projectRoot, 'public');
 const AUDIT_RETENTION_OPTIONS = Object.freeze([1, 3, 7, 30, 90, 180, 365]);
 const DEFAULT_AUDIT_RETENTION_DAYS = 30;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_PLAYBACK_PROGRESS_ITEMS = 500;
 
 function initDatabase(dataDir) {
@@ -105,6 +105,7 @@ function initDatabase(dataDir) {
     CREATE INDEX IF NOT EXISTS operation_logs_occurred_at_idx ON operation_logs(occurred_at DESC);
     CREATE INDEX IF NOT EXISTS playback_progress_updated_at_idx ON playback_progress(user_id, updated_at DESC);
   `);
+  ensureThrottleSchema(db);
   const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
   if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
   const adminCount = Number(db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n);
@@ -237,7 +238,7 @@ async function collectSystemInformation(dataDir) {
   };
 }
 
-export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus } = {}) {
+export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus, now = () => Date.now() } = {}) {
   if (!dataDir) dataDir = path.join(projectRoot, 'NanakoData', 'data');
   if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
     throw new Error('此原型僅允許本機連線；區域網路連線尚未開放。');
@@ -268,9 +269,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
   }
   const db = initDatabase(dataDir);
+  pruneExpiredThrottles(db, now());
   const pathLocks = createPathLockManager();
   const { withPathLocks, withPathLock } = pathLocks;
-  const loginFailures = new Map();
   const dummyPassword = await passwordHash('Nanako non-existent account timing check');
   const readAuditRetentionDays = () => {
     const raw = db.prepare("SELECT setting_value FROM app_settings WHERE setting_key = 'audit_retention_days'").get()?.setting_value;
@@ -367,8 +368,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (!isShareOperationAllowed(user, perm, write ? 'write' : 'read')) throw fail(403, 'permission_denied', '你沒有這項操作的權限。');
   }
   const filesRouter = createFilesRouter({ db, dataDir, requirePermission, shareRoot, permission, managedTrashPath, withPathLock, withPathLocks });
-  const vaultRouter = createVaultRouter({ db, dataDir, withPathLocks, withPathLock, ensureManagedDirectory, requirePermission, shareRoot });
-  const authRouter = createAuthRouter({ db, dataDir, loginFailures, dummyPassword, lockVaultKey: vaultRouter.lockVaultKey, findUser, getUserById, findShare, getPerm, allShares });
+  const vaultRouter = createVaultRouter({ db, dataDir, now, withPathLocks, withPathLock, ensureManagedDirectory, requirePermission, shareRoot });
+  const authRouter = createAuthRouter({ db, dataDir, now, dummyPassword, lockVaultKey: vaultRouter.lockVaultKey, findUser, getUserById, findShare, getPerm, allShares });
 
   function writeOperationLog(actor, action, target, outcome = '成功') {
     db.prepare('INSERT INTO operation_logs(id, occurred_at, actor_id, actor_name, action, target, outcome) VALUES(?,?,?,?,?,?,?)')
