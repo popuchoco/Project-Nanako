@@ -201,5 +201,8 @@ app.on('before-quit', (event) => {
 });
 
 app.on('window-all-closed', () => {
+  // If the window is truly destroyed while the tray is alive, keep the process running until formal quit starts.
+  const trayKeepsAlive = trayRef && !trayRef.isDestroyed() && !closing;
+  if (trayKeepsAlive) return;
   if (os.platform() !== 'darwin') app.quit();
 });

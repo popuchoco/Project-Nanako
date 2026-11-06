@@ -6,6 +6,17 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+test('window-all-closed keeps the process alive while the tray is active', async () => {
+  const main = await readFile(path.join(root, 'electron', 'main.mjs'), 'utf8');
+  const handler = main.match(/app\.on\('window-all-closed',\s*\(\)\s*=>\s*\{([\s\S]*?)\n\}\);/);
+
+  assert.ok(handler, 'window-all-closed handler should exist');
+  assert.match(handler[1], /trayRef\s*&&\s*!trayRef\.isDestroyed\(\)\s*&&\s*!closing/);
+  assert.match(handler[1], /if\s*\(trayKeepsAlive\)\s*return;/);
+  assert.match(handler[1], /if\s*\(os\.platform\(\)\s*!==\s*'darwin'\)\s*app\.quit\(\);/);
+  assert.doesNotMatch(handler[1], /app\.quit\(\);\s*\n\s*\}/, 'quit should remain gated by the tray and platform conditions');
+});
+
 test('desktop shell contains independent Nanako application-window regions and switchers', async () => {
   const html = await readFile(path.join(root, 'public', 'index.html'), 'utf8');
   const app = await readFile(path.join(root, 'public', 'app.js'), 'utf8');
