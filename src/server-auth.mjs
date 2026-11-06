@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { mkdir } from 'node:fs/promises';
 import { fail, json, readJson } from './http-utils.mjs';
 import { rejectSymlinkTraversal } from './path-guards.mjs';
-import { clearThrottle, getThrottle, recordFailure } from './throttle-store.mjs';
+import { clearThrottle, getThrottle, recordFailure, ThrottleCapacityError } from './throttle-store.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 export const SESSION_SECONDS = 12 * 60 * 60;
@@ -113,7 +113,14 @@ export function createAuthRouter(ctx) {
       const validPassword = password.length <= 256
         && await verifyPassword(password, user?.password_salt || dummyPassword.salt, user?.password_hash || dummyPassword.hash);
       if (!user || !user.is_active || !validPassword) {
-        recordFailure(db, 'login', throttleKey, timestamp);
+        try {
+          recordFailure(db, 'login', throttleKey, timestamp);
+        } catch (error) {
+          if (error instanceof ThrottleCapacityError) {
+            throw fail(429, 'login_throttled', '登入嘗試次數過多，請 15 分鐘後再試。');
+          }
+          throw error;
+        }
         throw fail(401, 'invalid_login', '帳號或密碼不正確。');
       }
       clearThrottle(db, 'login', throttleKey);
