@@ -32,7 +32,7 @@ cargo test --workspace --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.tom
 cargo build -p minimal-smb-example --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.toml
 ```
 
-上游 `minimal-smb-example` 可作 build／正常 Ctrl+C 停止 smoke test，其預設 listener 為 `127.0.0.1:4445`；但它有 public／匿名 shares，**不可當作授權驗收 harness**。授權驗收需另建上述 private-share harness 並加入 dialect／security 證據；不得把 harness 產生或載入的密碼寫入 repo／log。若 smoke test 使用上游隨機密碼，原輸出會記錄密碼，僅可留在本次測試主機，交付前遮除或直接删除，不使用真實帳號／密碼。
+上游 `minimal-smb-example` 可作 build／正常 Ctrl+C 停止 smoke test，其預設 listener 為 `127.0.0.1:4445`；但它有 public／匿名 shares，**不可當作授權驗收 harness**。授權驗收需另建上述 private-share harness（例如明確 `.require_signing(true)`、SMB3 `.encrypt_data(true)`，並保持 `.reject_unencrypted_access(true)`）及 dialect／security 證據；這些是已檢查的 API 選項，尚非 Windows 實測；不得把 harness 產生或載入的密碼寫入 repo／log。若 smoke test 使用上游隨機密碼，原輸出會記錄密碼，僅可留在本次測試主機，交付前遮除或直接删除，不使用真實帳號／密碼。
 
 執行 harness 時以新 console session 的臨時環境輸入一次性 synthetic secret，完成即關閉；設定 `SMB_LISTEN=127.0.0.1:4445`、`SMB_ROOT` 指向 synthetic 測試目錄，且不要設定 `SMB_DISCOVERY`。用 `Get-NetTCPConnection -LocalPort 4445 -State Listen` 保存位址。下方 Windows client 命令是**待驗證測試步驟**，其中的 secret 由當次測試者互動輸入，不貼進命令／腳本／紀錄：
 
