@@ -16,9 +16,10 @@ const execFileAsync = promisify(execFile);
 
 async function setupServer(t, options = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'localnas-test-'));
-  const server = await startServer({ dataDir, host: '127.0.0.1', port: 0, ...options });
+  const serverOptions = { dataDir, host: '127.0.0.1', port: 0, ...options };
+  let server = await startServer(serverOptions);
+  let base = `http://127.0.0.1:${server.port}`;
   t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${server.port}`;
   async function request(url, options = {}) {
     const { omitOrigin = false, ...fetchOptions } = options;
     const method = String(fetchOptions.method || 'GET').toUpperCase();
@@ -36,7 +37,13 @@ async function setupServer(t, options = {}) {
     const shares = await request('/api/shares', { headers: { Cookie: cookie } });
     return { cookie, shareId: shares.body.shares[0].id, user: body.user };
   }
-  return { base, dataDir, server, request, setup };
+  async function restart() {
+    await server.close();
+    server = await startServer(serverOptions);
+    base = `http://127.0.0.1:${server.port}`;
+    return server;
+  }
+  return { get base() { return base; }, dataDir, get server() { return server; }, request, restart, setup };
 }
 
 function requestRaw(port, pathname, { method = 'GET', headers = {}, body = '' } = {}) {
@@ -1580,6 +1587,11 @@ test('administrators can update share grants and deactivate accounts', async (t)
 test('users can change their own password and other sessions are revoked', async (t) => {
   const { request, setup } = await setupServer(t);
   const { cookie: originalCookie } = await setup();
+  const vaultCreated = await request('/api/vault/setup', {
+    method: 'POST', headers: { Cookie: originalCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'admin-vault-password-2026' }),
+  });
+  assert.equal(vaultCreated.response.status, 201);
   const secondLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
   const secondCookie = secondLogin.response.headers.get('set-cookie').split(';')[0];
   const changed = await request('/api/password', {
@@ -1591,6 +1603,9 @@ test('users can change their own password and other sessions are revoked', async
   assert.equal((await request('/api/me', { headers: { Cookie: originalCookie } })).response.status, 401);
   assert.equal((await request('/api/me', { headers: { Cookie: secondCookie } })).response.status, 401);
   assert.equal((await request('/api/me', { headers: { Cookie: renewedCookie } })).response.status, 200);
+  const vaultStatus = await request('/api/vault/status', { headers: { Cookie: renewedCookie } });
+  assert.equal(vaultStatus.response.status, 200);
+  assert.equal(vaultStatus.body.unlocked, false);
   const oldPassword = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
   assert.equal(oldPassword.response.status, 401);
   const newPassword = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin-new-passphrase-2026' }) });
@@ -1610,6 +1625,161 @@ test('repeated failed local logins are temporarily throttled', async (t) => {
   const limited = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
   assert.equal(limited.response.status, 429);
   assert.equal(limited.body.error, 'login_throttled');
+});
+
+test('manual vault lock preserves the session and logout clears the session and vault key', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-session-lock-password-2026' }),
+  });
+  assert.equal(created.response.status, 201);
+
+  const manuallyLocked = await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(manuallyLocked.response.status, 200);
+  assert.equal((await request('/api/me', { headers: { Cookie: cookie } })).response.status, 200);
+  const lockedStatus = await request('/api/vault/status', { headers: { Cookie: cookie } });
+  assert.equal(lockedStatus.response.status, 200);
+  assert.equal(lockedStatus.body.unlocked, false);
+
+  const unlocked = await request('/api/vault/unlock', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password: 'vault-session-lock-password-2026' }),
+  });
+  assert.equal(unlocked.response.status, 200);
+  const loggedOut = await request('/api/logout', { method: 'POST', headers: auth, body: '{}' });
+  assert.equal(loggedOut.response.status, 200);
+  assert.equal((await request('/api/me', { headers: { Cookie: cookie } })).response.status, 401);
+
+  const login = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(login.response.status, 200);
+  const newCookie = login.response.headers.get('set-cookie').split(';')[0];
+  const afterLogout = await request('/api/vault/status', { headers: { Cookie: newCookie } });
+  assert.equal(afterLogout.response.status, 200);
+  assert.equal(afterLogout.body.unlocked, false);
+});
+
+test('login throttle lockout persists across restart and expires with the injected clock', async (t) => {
+  let timestamp = Date.UTC(2026, 10, 6);
+  const { request, restart, setup } = await setupServer(t, { now: () => timestamp });
+  await setup();
+  for (let index = 0; index < 5; index += 1) {
+    const failed = await request('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: `wrong-login-password-${index}-2026` }),
+    });
+    assert.equal(failed.response.status, 401);
+  }
+  const locked = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(locked.response.status, 429);
+  assert.equal(locked.body.error, 'login_throttled');
+
+  await restart();
+  const afterRestart = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(afterRestart.response.status, 429);
+  assert.equal(afterRestart.body.error, 'login_throttled');
+
+  timestamp += 15 * 60 * 1000;
+  const afterExpiry = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(afterExpiry.response.status, 200);
+});
+
+test('vault unlock throttle persists across restart and expires with the injected clock', async (t) => {
+  let timestamp = Date.UTC(2026, 10, 6);
+  const { request, restart, setup } = await setupServer(t, { now: () => timestamp });
+  const { cookie } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const password = 'vault-persist-password-2026';
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password }),
+  });
+  assert.equal(created.response.status, 201);
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+
+  for (let index = 0; index < 5; index += 1) {
+    const failed = await request('/api/vault/unlock', {
+      method: 'POST', headers: auth, body: JSON.stringify({ password: `wrong-vault-password-${index}-2026` }),
+    });
+    assert.equal(failed.response.status, 401);
+  }
+  const locked = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(locked.response.status, 429);
+  assert.equal(locked.body.error, 'vault_unlock_throttled');
+
+  await restart();
+  const vaultStatus = await request('/api/vault/status', { headers: { Cookie: cookie } });
+  assert.equal(vaultStatus.response.status, 200);
+  assert.equal(vaultStatus.body.unlocked, false);
+  const afterRestart = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(afterRestart.response.status, 429);
+  assert.equal(afterRestart.body.error, 'vault_unlock_throttled');
+
+  timestamp += 15 * 60 * 1000;
+  const afterExpiry = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(afterExpiry.response.status, 200);
+});
+
+test('login and vault unlock throttles stay isolated for the same user', async (t) => {
+  let timestamp = Date.UTC(2026, 10, 6);
+  const { request, setup } = await setupServer(t, { now: () => timestamp });
+  const { cookie } = await setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const password = 'vault-isolation-password-2026';
+  const created = await request('/api/vault/setup', {
+    method: 'POST', headers: auth, body: JSON.stringify({ password }),
+  });
+  assert.equal(created.response.status, 201);
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+
+  for (let index = 0; index < 5; index += 1) {
+    const failed = await request('/api/vault/unlock', {
+      method: 'POST', headers: auth, body: JSON.stringify({ password: `wrong-vault-isolation-${index}-2026` }),
+    });
+    assert.equal(failed.response.status, 401);
+  }
+  const vaultLimited = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(vaultLimited.response.status, 429);
+  assert.equal(vaultLimited.body.error, 'vault_unlock_throttled');
+
+  const loginDuringVaultLock = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(loginDuringVaultLock.response.status, 200);
+
+  timestamp += 15 * 60 * 1000;
+  const unlockAfterVaultExpiry = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(unlockAfterVaultExpiry.response.status, 200);
+  await request('/api/vault/lock', { method: 'POST', headers: auth, body: '{}' });
+
+  for (let index = 0; index < 5; index += 1) {
+    const failed = await request('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: `wrong-login-isolation-${index}-2026` }),
+    });
+    assert.equal(failed.response.status, 401);
+  }
+  const loginLimited = await request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }),
+  });
+  assert.equal(loginLimited.response.status, 429);
+  assert.equal(loginLimited.body.error, 'login_throttled');
+
+  const unlockDuringLoginLock = await request('/api/vault/unlock', { method: 'POST', headers: auth, body: JSON.stringify({ password }) });
+  assert.equal(unlockDuringLoginLock.response.status, 200);
 });
 
 test('SMB status is an administrator-only, read-only preflight and never claims Nanako sharing is ready', async (t) => {

@@ -4,11 +4,10 @@ import { promisify } from 'node:util';
 import { mkdir } from 'node:fs/promises';
 import { fail, json, readJson } from './http-utils.mjs';
 import { rejectSymlinkTraversal } from './path-guards.mjs';
+import { clearThrottle, getThrottle, recordFailure } from './throttle-store.mjs';
 
 const scrypt = promisify(crypto.scrypt);
 export const SESSION_SECONDS = 12 * 60 * 60;
-const LOGIN_FAILURE_LIMIT = 5;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 export function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -48,7 +47,7 @@ export async function verifyPassword(password, saltHex, expectedHex) {
 
 export function createAuthRouter(ctx) {
   const {
-    db, dataDir, loginFailures, dummyPassword, lockVaultKey,
+    db, dataDir, now = () => Date.now(), dummyPassword, lockVaultKey,
     findUser, getUserById, findShare, getPerm, allShares,
   } = ctx;
 
@@ -57,7 +56,7 @@ export function createAuthRouter(ctx) {
     if (!token || token.length > 200) return null;
     const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?').get(hashToken(token));
     if (!row) return null;
-    if (row.expires_at < Date.now()) { await lockVaultKey(row.user_id); return null; }
+    if (row.expires_at < now()) { await lockVaultKey(row.user_id); return null; }
     const user = getUserById.get(row.user_id) || null;
     return user?.isActive ? user : null;
   }
@@ -75,7 +74,7 @@ export function createAuthRouter(ctx) {
       const pass = await passwordHash(body.password);
       const userId = crypto.randomUUID();
       const shareId = crypto.randomUUID();
-      const now = new Date().toISOString();
+      const createdAt = new Date().toISOString();
       const token = crypto.randomBytes(32).toString('base64url');
       db.exec('BEGIN IMMEDIATE');
       try {
@@ -83,10 +82,10 @@ export function createAuthRouter(ctx) {
           throw fail(409, 'already_setup', '已完成初始設定。');
         }
         db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-          .run(userId, username, pass.salt, pass.hash, 'admin', now);
-        db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', now);
+          .run(userId, username, pass.salt, pass.hash, 'admin', createdAt);
+        db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', createdAt);
         db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
-        db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_SECONDS * 1000);
+        db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, now() + SESSION_SECONDS * 1000);
         db.exec('COMMIT');
       } catch (error) {
         try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
@@ -106,33 +105,21 @@ export function createAuthRouter(ctx) {
       const accountKey = attemptedUsername.trim().toLocaleLowerCase('en-US');
       const sourceKey = req.socket.remoteAddress || 'local';
       const throttleKey = `${sourceKey}\0${accountKey}`;
-      const now = Date.now();
-      if (loginFailures.size > 2048) {
-        for (const [key, value] of loginFailures) {
-          if (now - value.windowStartedAt >= LOGIN_WINDOW_MS) loginFailures.delete(key);
-        }
-      }
-      let attempt = loginFailures.get(throttleKey);
-      if (attempt && now - attempt.windowStartedAt >= LOGIN_WINDOW_MS) {
-        loginFailures.delete(throttleKey);
-        attempt = null;
-      }
-      if (attempt?.lockedUntil > now) throw fail(429, 'login_throttled', '登入嘗試次數過多，請 15 分鐘後再試。');
+      const timestamp = now();
+      const attempt = getThrottle(db, 'login', throttleKey, timestamp);
+      if (attempt?.lockedUntil > timestamp) throw fail(429, 'login_throttled', '登入嘗試次數過多，請 15 分鐘後再試。');
       const user = findUser.get(String(body.username || ''));
       const password = String(body.password || '');
       const validPassword = password.length <= 256
         && await verifyPassword(password, user?.password_salt || dummyPassword.salt, user?.password_hash || dummyPassword.hash);
       if (!user || !user.is_active || !validPassword) {
-        const next = attempt || { count: 0, windowStartedAt: now, lockedUntil: 0 };
-        next.count += 1;
-        if (next.count >= LOGIN_FAILURE_LIMIT) next.lockedUntil = now + LOGIN_WINDOW_MS;
-        loginFailures.set(throttleKey, next);
+        recordFailure(db, 'login', throttleKey, timestamp);
         throw fail(401, 'invalid_login', '帳號或密碼不正確。');
       }
-      loginFailures.delete(throttleKey);
+      clearThrottle(db, 'login', throttleKey);
       setAudit(user, '登入', user.username);
       const token = crypto.randomBytes(32).toString('base64url');
-      db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
+      db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, now() + SESSION_SECONDS * 1000);
       json(res, 200, { user: getUserById.get(user.id) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
       return true;
     }
@@ -164,7 +151,7 @@ export function createAuthRouter(ctx) {
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
       await lockVaultKey(user.id);
       const token = crypto.randomBytes(32).toString('base64url');
-      db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
+      db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, now() + SESSION_SECONDS * 1000);
       json(res, 200, { ok: true }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
       return true;
     }
