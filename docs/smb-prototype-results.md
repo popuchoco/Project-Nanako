@@ -51,3 +51,18 @@ SMB 引擎至少要能在 Windows 執行、可安全綁定指定網卡、支援�
 ## 下一個實作閘門
 
 優先以 `paltaio/rust-smb-server` 0.8.0 完成 Windows 編譯與 localhost POC；若 Windows 支援、授權介面或用戶端互通任一閘門失敗，回到 Windows 內建 SMB Server 與其他可維護候選重新比較。任何引擎都須完成逐帳號授權、重新解析點防護、指定 IP 綁定、簽章／加密及正常停機測試，再接入受控生命週期。候選未通過前，不開放 TCP 445、不變更 Windows 內建 SMB 服務或防火牆，也不把候選原始碼列入 `THIRD_PARTY.md`。
+
+## 2026-11-06 Linux 部分驗證與 Windows 缺口
+
+- 範圍：定錨 [`smb-v04-slice-0.md`](smb-v04-slice-0.md)；只在 Linux x86_64 檢查現有唯讀 probe、固定 revision 的候選 README／manifest／example，並執行 Nanako 既有測試。沒有啟動 SMB server 或 listener。
+- 固定 revision `c57fe2c1e58f3bb0882b4e762a89522824d16ccd` 的 `Cargo.toml` 標示 `smb-server` 0.8.0、`rust-version = "1.95"`；上游 example 預設 `127.0.0.1:4445`，但包含 public／匿名 shares，不符合 Nanako 驗收，不能取代 private-share harness。上游提供候選程序自身的 `shutdown_handle()` API，和 Windows `LanmanServer` 無關。
+- 本機為 Cargo/Rust 1.85.1，無 rustup、Rust 1.95、Windows target／MSVC linker、PowerShell 與 `smbclient`；因此本次**未做 Windows build，也未做 SMB2/3 client 互通**。既有 Windows crate tests 的 CI 通過仍只代表 crate test suite，不能當作本 slice 驗收。
+- 既有 `readWindowsSmbStatus` 在 Linux 直接回 `supported: false`／`detected: false`／`serverService: Unsupported`；這是平台防護路徑，不是實際 Windows 服務或 445 狀態。服務／445／命令欄位與 `/api/smb/status` 的 elevation 已存在，故本包不改 probe、不加 route。
+
+### 需要小鑫：Windows localhost PoC
+
+- [ ] 依 slice-0 在 Windows x64 驗證 pinned revision、Rust 1.95.0 及 crate build／tests；保留不含 secret 的原始 log。
+- [ ] 建立 private-only 兩帳號／兩 share harness；確認 loopback-only、未開 discovery、未操作 `LanmanServer`／445／防火牆。
+- [ ] 實測 Windows 原生 client 的 `\\127.0.0.1@4445\...` 替代埠連線，保存 dialect、signing、encryption 證據與實際錯誤碼。
+- [ ] 驗證逐帳號逐分享授權、匿名拒絕、路徑／junction／symlink 隔離、CRUD、並行／鎖定／重連及候選自身正常停止。
+- [ ] 回填實際 Windows／client versions、工具版本、結果 log 與 go/no-go；未通過前不改 roadmap 勾選、不宣稱採用引擎。
