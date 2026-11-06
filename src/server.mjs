@@ -11,11 +11,31 @@ import { Transform } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import {
+  buildLoopbackOriginAllowlist,
+  fail,
+  isLoopbackAddress,
+  json,
+  mediaTypes,
+  mimeTypes,
+  parseByteRange,
+  readJson,
+  writeResponseChunk,
+} from './http-utils.mjs';
+import { createAuthRouter, passwordHash } from './server-auth.mjs';
+import { createFilesRouter } from './server-files.mjs';
+import {
+  createPathLockManager,
+  rejectSymlinkTraversal,
+  relativeParts,
+  resolveInside,
+  resolveShareInside,
+  safeName,
+} from './path-guards.mjs';
 import { createArchive, extractArchive } from './archives.mjs';
 import { readWindowsSmbStatus } from './windows-smb-status.mjs';
 import { isShareOperationAllowed } from './share-access.mjs';
 import { hashManagedFile, scanManagedDuplicates } from './duplicates.mjs';
-import { searchManagedFiles } from './file-catalog.mjs';
 import {
   copyVaultBackupObject,
   createVaultBackup,
@@ -38,16 +58,11 @@ import {
   unlockVaultWithRecoveryCode,
 } from './vault-crypto.mjs';
 
-const scrypt = promisify(crypto.scrypt);
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicRoot = path.join(projectRoot, 'public');
-const SESSION_SECONDS = 12 * 60 * 60;
-const MAX_JSON_BYTES = 64 * 1024;
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 const AUDIT_RETENTION_OPTIONS = Object.freeze([1, 3, 7, 30, 90, 180, 365]);
 const DEFAULT_AUDIT_RETENTION_DAYS = 30;
-const LOGIN_FAILURE_LIMIT = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const VAULT_UNLOCK_FAILURE_LIMIT = 5;
 const VAULT_IDLE_LOCK_MS = 15 * 60 * 1000;
@@ -56,329 +71,6 @@ const MAX_DUPLICATE_SCAN_JOBS = 2;
 const MAX_DUPLICATE_SELECTIONS = 200;
 const MAX_DUPLICATE_CLEANUP_ITEMS = 1000;
 const MAX_PLAYBACK_PROGRESS_ITEMS = 500;
-
-function buildLoopbackOriginAllowlist(server) {
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Nanako 伺服器尚未繫結有效的本機位址。');
-  }
-  const scheme = server instanceof HttpsServer ? 'https' : 'http';
-  const port = address.port;
-  return {
-    origins: new Set([
-      `${scheme}://127.0.0.1:${port}`,
-      `${scheme}://localhost:${port}`,
-      `${scheme}://[::1]:${port}`,
-    ]),
-    hosts: new Set([
-      `127.0.0.1:${port}`,
-      `localhost:${port}`,
-      `[::1]:${port}`,
-    ]),
-  };
-}
-
-function parseIpv4(address) {
-  const parts = address.split('.');
-  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/u.test(part))) return null;
-  const octets = parts.map(Number);
-  if (octets.some((part) => part > 255)) return null;
-  return octets;
-}
-
-function parseIpv6(address) {
-  let value = address.toLowerCase().split('%', 1)[0];
-  if (value.includes('.')) {
-    const ipv4Start = value.lastIndexOf(':') + 1;
-    const ipv4 = parseIpv4(value.slice(ipv4Start));
-    if (ipv4Start === 0 || !ipv4) return null;
-    const first = ((ipv4[0] << 8) | ipv4[1]).toString(16);
-    const second = ((ipv4[2] << 8) | ipv4[3]).toString(16);
-    value = `${value.slice(0, ipv4Start)}${first}:${second}`;
-  }
-
-  const compression = value.indexOf('::');
-  if (compression !== -1 && compression !== value.lastIndexOf('::')) return null;
-  let words;
-  if (compression === -1) {
-    words = value.split(':');
-    if (words.length !== 8) return null;
-  } else {
-    const left = value.slice(0, compression).split(':').filter(Boolean);
-    const right = value.slice(compression + 2).split(':').filter(Boolean);
-    const zeroCount = 8 - left.length - right.length;
-    if (zeroCount < 1) return null;
-    words = [...left, ...Array(zeroCount).fill('0'), ...right];
-  }
-  if (words.length !== 8 || words.some((word) => !/^[0-9a-f]{1,4}$/u.test(word))) return null;
-  return words.map((word) => Number.parseInt(word, 16));
-}
-
-function isLoopbackAddress(address) {
-  if (typeof address !== 'string') return false;
-  const ipv4 = parseIpv4(address);
-  if (ipv4) return ipv4[0] === 127;
-
-  const words = parseIpv6(address);
-  if (!words) return false;
-  if (words.slice(0, 7).every((word) => word === 0) && words[7] === 1) return true;
-  return words.slice(0, 5).every((word) => word === 0)
-    && words[5] === 0xffff
-    && (words[6] >> 8) === 127;
-}
-
-const mimeTypes = new Map([
-  ['.html', 'text/html; charset=utf-8'], ['.css', 'text/css; charset=utf-8'],
-  ['.js', 'text/javascript; charset=utf-8'], ['.mjs', 'text/javascript; charset=utf-8'], ['.svg', 'image/svg+xml'],
-]);
-const mediaTypes = new Map([
-  ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'],
-  ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.avif', 'image/avif'], ['.bmp', 'image/bmp'],
-  ['.mp4', 'video/mp4'], ['.m4v', 'video/x-m4v'], ['.mov', 'video/quicktime'],
-  ['.webm', 'video/webm'], ['.ogv', 'video/ogg'],
-  ['.mp3', 'audio/mpeg'], ['.m4a', 'audio/mp4'], ['.aac', 'audio/aac'],
-  ['.wav', 'audio/wav'], ['.oga', 'audio/ogg'], ['.ogg', 'audio/ogg'],
-  ['.opus', 'audio/ogg'], ['.flac', 'audio/flac'],
-]);
-
-function json(res, status, data, headers = {}) {
-  const body = Buffer.from(JSON.stringify(data));
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': body.length,
-    'Cache-Control': 'no-store',
-    ...headers,
-  });
-  res.end(body);
-}
-
-function fail(status, code, message) {
-  const error = new Error(message);
-  error.status = status;
-  error.code = code;
-  return error;
-}
-
-function parseByteRange(header, size) {
-  if (!header) return null;
-  const invalid = () => fail(416, 'invalid_range', '要求的影音播放範圍不正確。');
-  if (typeof header !== 'string' || header.length > 128 || size <= 0 || header.includes(',')) throw invalid();
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(header.trim());
-  if (!match || (!match[1] && !match[2])) throw invalid();
-  let start; let end;
-  if (!match[1]) {
-    const suffix = Number(match[2]);
-    if (!Number.isSafeInteger(suffix) || suffix <= 0) throw invalid();
-    start = Math.max(0, size - suffix); end = size - 1;
-  } else {
-    start = Number(match[1]); end = match[2] ? Number(match[2]) : size - 1;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= size) throw invalid();
-    end = Math.min(end, size - 1);
-  }
-  return { start, end };
-}
-
-function writeResponseChunk(res, chunk) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      res.off('drain', onDrain);
-      res.off('close', onClose);
-      if (error) reject(error);
-      else resolve();
-    };
-    const onDrain = () => finish();
-    const onClose = () => finish();
-    res.once('close', onClose);
-    if (res.write(chunk)) finish();
-    else res.once('drain', onDrain);
-  });
-}
-
-async function readJson(req) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > MAX_JSON_BYTES) throw fail(413, 'request_too_large', '資料太大。');
-    chunks.push(chunk);
-  }
-  if (size === 0) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw fail(400, 'invalid_json', '資料格式不正確。'); }
-}
-
-function safeName(value) {
-  if (typeof value !== 'string') throw fail(400, 'invalid_name', '名稱不正確。');
-  const name = value.trim();
-  if (!name || name.length > 180 || name === '.' || name === '..' || name.toLocaleLowerCase('en-US') === '.nanako-trash' || name.toLocaleLowerCase('en-US').startsWith('.localnas-') || /[\\/\0<>:"|?*]/u.test(name)) {
-    throw fail(400, 'invalid_name', '名稱不可空白，也不能使用 Windows 或 Nanako 保留名稱。');
-  }
-  if (/[. ]$/u.test(name)) throw fail(400, 'invalid_name', '名稱不能以句點或空白結尾。');
-  if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu.test(name)) {
-    throw fail(400, 'invalid_name', '名稱不能使用 Windows 保留裝置名稱。');
-  }
-  return name;
-}
-
-function relativeParts(value) {
-  if (typeof value !== 'string' || value.length > 2048) throw fail(400, 'invalid_path', '路徑不正確。');
-  const normalized = value.replaceAll('\\', '/');
-  if (normalized.startsWith('/') || /^[a-zA-Z]:/u.test(normalized)) throw fail(400, 'invalid_path', '不能使用絕對路徑。');
-  const parts = normalized.split('/').filter(Boolean);
-  if (parts.some((part) => part === '.' || part === '..' || part.includes('\0'))) throw fail(400, 'invalid_path', '路徑不正確。');
-  return parts;
-}
-
-function resolveInside(root, relative = '') {
-  const parts = relativeParts(relative);
-  const base = path.resolve(root);
-  const target = path.resolve(base, ...parts);
-  const rel = path.relative(base, target);
-  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw fail(400, 'invalid_path', '路徑超出分享範圍。');
-  return { target, parts };
-}
-
-function resolveShareInside(root, relative = '') {
-  const resolved = resolveInside(root, relative);
-  if (resolved.parts.some((part) => part.toLocaleLowerCase('en-US') === '.nanako-trash')
-    || resolved.parts.some((part) => part.toLocaleLowerCase('en-US').startsWith('.localnas-'))) {
-    throw fail(404, 'not_found', '找不到這個項目。');
-  }
-  return resolved;
-}
-
-const MAX_COPY_ENTRIES = 100_000;
-
-async function measureCopyTree(source, totals = { bytes: 0, entries: 0 }) {
-  const info = await lstat(source);
-  if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
-  if (info.isFile()) totals.bytes += info.size;
-  else if (!info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援複製一般檔案與資料夾。');
-  totals.entries += 1;
-  if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
-  if (info.isDirectory()) {
-    for (const entry of await readdir(source, { withFileTypes: true })) {
-      const normalizedName = entry.name.toLocaleLowerCase('en-US');
-      if (normalizedName.startsWith('.localnas-') || normalizedName === '.nanako-trash') continue;
-      await measureCopyTree(path.join(source, entry.name), totals);
-    }
-  }
-  return totals;
-}
-
-async function copyManagedTree(source, destination, totals = { entries: 0 }) {
-  const info = await lstat(source);
-  if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
-  if (info.isFile()) {
-    totals.entries += 1;
-    if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
-    await pipeline(createReadStream(source), createWriteStream(destination, { flags: 'wx' }));
-    return totals;
-  }
-  if (!info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援複製一般檔案與資料夾。');
-  totals.entries += 1;
-  if (totals.entries > MAX_COPY_ENTRIES) throw fail(413, 'copy_too_many_entries', '單次複製最多可處理 100,000 個項目。');
-  await mkdir(destination);
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    const normalizedName = entry.name.toLocaleLowerCase('en-US');
-    if (normalizedName.startsWith('.localnas-') || normalizedName === '.nanako-trash') continue;
-    await copyManagedTree(path.join(source, entry.name), path.join(destination, entry.name), totals);
-  }
-  return totals;
-}
-
-async function itemExists(target) {
-  try { await lstat(target); return true; }
-  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-}
-
-const mutationLocks = new Map();
-async function withPathLockKey(key, operation) {
-  const previous = mutationLocks.get(key) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => { release = resolve; });
-  mutationLocks.set(key, current);
-  await previous;
-  try { return await operation(); }
-  finally {
-    release();
-    if (mutationLocks.get(key) === current) mutationLocks.delete(key);
-  }
-}
-
-async function withPathLocks(targets, operation) {
-  const keys = [...new Set(targets.map((target) => path.resolve(target).toLocaleLowerCase('en-US')))].sort();
-  const acquire = (index) => index === keys.length
-    ? operation()
-    : withPathLockKey(keys[index], () => acquire(index + 1));
-  return acquire(0);
-}
-
-const withPathLock = (target, operation) => withPathLocks([target], operation);
-
-async function rejectSymlinkTraversal(managedRoot, root, target, includeLeaf = true) {
-  managedRoot = path.resolve(managedRoot);
-  const absoluteRoot = path.resolve(root);
-  const absoluteTarget = path.resolve(target);
-  const rootRelative = path.relative(managedRoot, absoluteRoot);
-  const relative = path.relative(absoluteRoot, absoluteTarget);
-  if ([rootRelative, relative].some((value) => value === '..' || value.startsWith(`..${path.sep}`) || path.isAbsolute(value))) {
-    throw fail(400, 'invalid_path', '路徑超出 Nanako 資料範圍。');
-  }
-  const managedRelative = path.relative(managedRoot, absoluteTarget);
-  const parts = managedRelative ? managedRelative.split(path.sep) : [];
-  let current = managedRoot;
-  const count = includeLeaf ? parts.length : Math.max(0, parts.length - 1);
-  for (const part of parts.slice(0, count)) {
-    current = path.join(current, part);
-    try {
-      const info = await lstat(current);
-      if (info.isSymbolicLink()) throw fail(400, 'symlink_not_allowed', 'Nanako 資料範圍內不可使用符號連結或重新解析點。');
-    } catch (error) {
-      if (error.code === 'ENOENT') break;
-      throw error;
-    }
-  }
-}
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
-}
-
-function cookieValue(req, name) {
-  const raw = req.headers.cookie || '';
-  for (const pair of raw.split(';')) {
-    const index = pair.indexOf('=');
-    if (index < 0) continue;
-    if (pair.slice(0, index).trim() === name) return decodeURIComponent(pair.slice(index + 1).trim());
-  }
-  return '';
-}
-
-function validateUsername(value) {
-  if (typeof value !== 'string' || !/^[\p{L}\p{N}._-]{3,32}$/u.test(value)) {
-    throw fail(400, 'invalid_username', '帳號請使用 3 至 32 個中文字、英文字母、數字、句點、底線或連字號。');
-  }
-  return value;
-}
-
-async function passwordHash(password, salt = crypto.randomBytes(16)) {
-  if (typeof password !== 'string' || password.length < 12 || password.length > 256) {
-    throw fail(400, 'weak_password', '密碼長度須為 12 至 256 個字元。');
-  }
-  const derived = await scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-  return { salt: salt.toString('hex'), hash: Buffer.from(derived).toString('hex') };
-}
-
-async function verifyPassword(password, saltHex, expectedHex) {
-  const salt = Buffer.from(saltHex, 'hex');
-  const actual = Buffer.from(await scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }));
-  const expected = Buffer.from(expectedHex, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-}
 
 function initDatabase(dataDir) {
   const dbPath = path.join(dataDir, 'metadata.sqlite');
@@ -608,6 +300,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
   }
   const db = initDatabase(dataDir);
+  const pathLocks = createPathLockManager();
+  const { withPathLocks, withPathLock } = pathLocks;
   const loginFailures = new Map();
   const vaultUnlockFailures = new Map();
   const unlockedVaultKeys = new Map();
@@ -893,6 +587,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     const perm = permission(user, shareId);
     if (!isShareOperationAllowed(user, perm, write ? 'write' : 'read')) throw fail(403, 'permission_denied', '你沒有這項操作的權限。');
   }
+  const filesRouter = createFilesRouter({ db, dataDir, requirePermission, shareRoot, permission, managedTrashPath, withPathLock, withPathLocks });
+  const authRouter = createAuthRouter({ db, dataDir, loginFailures, dummyPassword, lockVaultKey, findUser, getUserById, findShare, getPerm, allShares });
 
   function pruneDuplicateScans(now = Date.now()) {
     for (const [id, job] of duplicateScans) {
@@ -958,16 +654,6 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       .run(crypto.randomUUID(), Date.now(), actor?.id || null, String(actor?.username || '未知使用者').slice(0, 80), String(action).slice(0, 80), String(target || '').slice(0, 512), outcome);
   }
 
-  async function currentUser(req) {
-    const token = cookieValue(req, 'localnas_session');
-    if (!token || token.length > 200) return null;
-    const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?').get(hashToken(token));
-    if (!row) return null;
-    if (row.expires_at < Date.now()) { await lockVaultKey(row.user_id); return null; }
-    const user = getUserById.get(row.user_id) || null;
-    return user?.isActive ? user : null;
-  }
-
   let closed = false;
   let allowedOrigins = new Set();
   let allowedHosts = new Set();
@@ -1008,86 +694,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       }
 
       if (route.startsWith('/api/')) {
-        if (route === '/api/setup-state' && method === 'GET') {
-          return json(res, 200, { needsSetup: Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) === 0 });
-        }
-        if (route === '/api/setup' && method === 'POST') {
-          if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) throw fail(409, 'already_setup', '已完成初始設定。');
-          const body = await readJson(req);
-          const username = validateUsername(body.username);
-          setAudit({ username }, '建立本機管理員', username);
-          const pass = await passwordHash(body.password);
-          const userId = crypto.randomUUID();
-          const shareId = crypto.randomUUID();
-          const now = new Date().toISOString();
-          const token = crypto.randomBytes(32).toString('base64url');
-          db.exec('BEGIN IMMEDIATE');
-          try {
-            if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) {
-              throw fail(409, 'already_setup', '已完成初始設定。');
-            }
-            db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-              .run(userId, username, pass.salt, pass.hash, 'admin', now);
-            db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', now);
-            db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
-            db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_SECONDS * 1000);
-            db.exec('COMMIT');
-          } catch (error) {
-            try { db.exec('ROLLBACK'); } catch { /* transaction may not have begun */ }
-            throw error;
-          }
-          const newShareRoot = path.join(dataDir, 'files', shareId);
-          await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot, false);
-          await mkdir(newShareRoot);
-          await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot);
-          return json(res, 201, { user: getUserById.get(userId) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
-        }
-        if (route === '/api/login' && method === 'POST') {
-          const body = await readJson(req);
-          const attemptedUsername = String(body.username || '').slice(0, 80);
-          setAudit({ username: attemptedUsername || '未知使用者' }, '登入', attemptedUsername);
-          const accountKey = attemptedUsername.trim().toLocaleLowerCase('en-US');
-          const sourceKey = req.socket.remoteAddress || 'local';
-          const throttleKey = `${sourceKey}\0${accountKey}`;
-          const now = Date.now();
-          if (loginFailures.size > 2048) {
-            for (const [key, value] of loginFailures) {
-              if (now - value.windowStartedAt >= LOGIN_WINDOW_MS) loginFailures.delete(key);
-            }
-          }
-          let attempt = loginFailures.get(throttleKey);
-          if (attempt && now - attempt.windowStartedAt >= LOGIN_WINDOW_MS) {
-            loginFailures.delete(throttleKey);
-            attempt = null;
-          }
-          if (attempt?.lockedUntil > now) throw fail(429, 'login_throttled', '登入嘗試次數過多，請 15 分鐘後再試。');
-          const user = findUser.get(String(body.username || ''));
-          const password = String(body.password || '');
-          const validPassword = password.length <= 256
-            && await verifyPassword(password, user?.password_salt || dummyPassword.salt, user?.password_hash || dummyPassword.hash);
-          if (!user || !user.is_active || !validPassword) {
-            const next = attempt || { count: 0, windowStartedAt: now, lockedUntil: 0 };
-            next.count += 1;
-            if (next.count >= LOGIN_FAILURE_LIMIT) next.lockedUntil = now + LOGIN_WINDOW_MS;
-            loginFailures.set(throttleKey, next);
-            throw fail(401, 'invalid_login', '帳號或密碼不正確。');
-          }
-          loginFailures.delete(throttleKey);
-          setAudit(user, '登入', user.username);
-          const token = crypto.randomBytes(32).toString('base64url');
-          db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
-          return json(res, 200, { user: getUserById.get(user.id) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
-        }
-        if (route === '/api/logout' && method === 'POST') {
-          const token = cookieValue(req, 'localnas_session');
-          const session = token ? db.prepare('SELECT user_id FROM sessions WHERE token_hash = ?').get(hashToken(token)) : null;
-          const signedOutUser = session ? getUserById.get(session.user_id) : null;
-          if (signedOutUser) { setAudit(signedOutUser, '登出', signedOutUser.username); await lockVaultKey(signedOutUser.id); }
-          if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
-          return json(res, 200, { ok: true }, { 'Set-Cookie': 'localnas_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
-        }
+        if (await authRouter.handleBeforeAuthentication({ req, res, method, route, setAudit })) return;
 
-        const user = await currentUser(req);
+        const user = await authRouter.currentUser(req);
         if (!user) throw fail(401, 'authentication_required', '請先登入。');
         const inferredAudit = auditForRequest(user, method, route, url);
         if (inferredAudit) setAudit(user, inferredAudit.action, inferredAudit.target);
@@ -1912,21 +1521,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           return json(res, 200, { ok: outcomes.failed.length === 0, moved: outcomes.moved, failed: outcomes.failed });
         }
 
-        if (route === '/api/me' && method === 'GET') return json(res, 200, { user });
-        if (route === '/api/password' && method === 'POST') {
-          const body = await readJson(req);
-          const current = db.prepare('SELECT password_salt, password_hash FROM users WHERE id = ?').get(user.id);
-          if (!await verifyPassword(String(body.currentPassword || ''), current.password_salt, current.password_hash)) {
-            throw fail(400, 'current_password_incorrect', '目前密碼不正確。');
-          }
-          const nextPassword = await passwordHash(body.newPassword);
-          db.prepare('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?').run(nextPassword.salt, nextPassword.hash, user.id);
-          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
-          await lockVaultKey(user.id);
-          const token = crypto.randomBytes(32).toString('base64url');
-          db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, Date.now() + SESSION_SECONDS * 1000);
-          return json(res, 200, { ok: true }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
-        }
+        if (await authRouter.handleAccountRoute({ req, res, method, route, user })) return;
         if (route === '/api/shares' && method === 'GET') {
           const shares = allShares.all().filter((share) => permission(user, share.id).can_read).map((share) => ({
             id: share.id,
@@ -2009,383 +1604,16 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看電腦資訊。');
           return json(res, 200, await collectSystemInformation(dataDir));
         }
-        if (route === '/api/files' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId);
-          const { root } = shareRoot(shareId);
-          const { target } = resolveShareInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(dataDir, root, target);
-          const info = await stat(target).catch(() => null);
-          if (!info?.isDirectory()) throw fail(404, 'folder_not_found', '找不到資料夾。');
-          const entries = await readdir(target, { withFileTypes: true });
-          const items = [];
-          for (const entry of entries) {
-            if (entry.name.toLocaleLowerCase('en-US').startsWith('.localnas-') || entry.name.toLocaleLowerCase('en-US') === '.nanako-trash') continue;
-            const itemPath = path.join(target, entry.name);
-            const itemInfo = await lstat(itemPath);
-            if (itemInfo.isSymbolicLink()) continue;
-            items.push({ name: entry.name, isDirectory: itemInfo.isDirectory(), size: itemInfo.isFile() ? itemInfo.size : null, modifiedAt: itemInfo.mtime.toISOString() });
-          }
-          items.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name, 'zh-TW', { numeric: true }));
-          return json(res, 200, { path: relativeParts(url.searchParams.get('path') || '').join('/'), items, canWrite: Boolean(permission(user, shareId).can_write) });
-        }
-        if (route === '/api/files/search' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId);
-          const { share, root } = shareRoot(shareId);
-          await rejectSymlinkTraversal(dataDir, dataDir, root);
-          const results = await searchManagedFiles({
-            root,
-            category: url.searchParams.get('category') || '',
-            search: url.searchParams.get('search') || '',
-            verifyPath: (target) => rejectSymlinkTraversal(dataDir, root, target),
-          });
-          return json(res, 200, {
-            ...results,
-            share: { id: share.id, name: share.name },
-            canWrite: Boolean(permission(user, shareId).can_write),
-          });
-        }
-        if (route === '/api/folders' && method === 'POST') {
-          const body = await readJson(req);
-          if (auditEvent) auditEvent.target = `${body.path ? `${String(body.path).slice(0, 256)}/` : ''}${String(body.name || '').slice(0, 180)}`.slice(0, 512);
-          const shareId = String(body.shareId || '');
-          requirePermission(user, shareId, true);
-          const { root } = shareRoot(shareId);
-          const parent = resolveShareInside(root, body.path || '');
-          await rejectSymlinkTraversal(dataDir, root, parent.target);
-          if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
-          const name = safeName(body.name);
-          const target = path.join(parent.target, name);
-          return await withPathLock(target, async () => {
-            await mkdir(target).catch((error) => { if (error.code === 'EEXIST') throw fail(409, 'already_exists', '同名項目已存在。'); throw error; });
-            return json(res, 201, { ok: true });
-          });
-        }
-        if (route === '/api/files/rename' && method === 'POST') {
-          const body = await readJson(req);
-          const shareId = String(body.shareId || '');
-          requirePermission(user, shareId, true);
-          const { root } = shareRoot(shareId);
-          const { target: source, parts } = resolveShareInside(root, body.path || '');
-          if (!parts.length) throw fail(400, 'cannot_rename_root', '不能重新命名資料空間本身。');
-          const name = safeName(body.newName);
-          const parent = resolveShareInside(root, parts.slice(0, -1).join('/'));
-          await rejectSymlinkTraversal(dataDir, root, source);
-          await rejectSymlinkTraversal(dataDir, root, parent.target);
-          const info = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-          if (!info || info.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
-          if (!info.isFile() && !info.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援重新命名一般檔案與資料夾。');
-          const destination = path.join(parent.target, name);
-          if (destination === source) return json(res, 200, { ok: true, name: parts.at(-1), unchanged: true });
-          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...parts.slice(0, -1), name].join('/')}`;
-          return await withPathLocks([source, destination], async () => {
-            const exists = await itemExists(destination);
-            const caseOnlyRename = process.platform === 'win32' && destination.toLocaleLowerCase('en-US') === source.toLocaleLowerCase('en-US');
-            if (exists && !caseOnlyRename) throw fail(409, 'already_exists', '目的地已有同名項目。');
-            if (caseOnlyRename) {
-              const temporary = path.join(parent.target, `.localnas-rename-${crypto.randomUUID()}.tmp`);
-              await rename(source, temporary);
-              try { await rename(temporary, destination); }
-              catch (error) { await rename(temporary, source).catch(() => {}); throw error; }
-              return json(res, 200, { ok: true, name });
-            }
-            await rename(source, destination);
-            return json(res, 200, { ok: true, name });
-          });
-        }
-        if (route === '/api/files/move' && method === 'POST') {
-          const body = await readJson(req);
-          const shareId = String(body.shareId || '');
-          requirePermission(user, shareId, true);
-          const { root } = shareRoot(shareId);
-          const { target: source, parts } = resolveShareInside(root, body.path || '');
-          if (!parts.length) throw fail(400, 'cannot_move_root', '不能移動資料空間本身。');
-          const destinationDirectory = resolveShareInside(root, body.destinationPath || '');
-          await rejectSymlinkTraversal(dataDir, root, source);
-          await rejectSymlinkTraversal(dataDir, root, destinationDirectory.target);
-          const sourceInfo = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-          if (!sourceInfo || sourceInfo.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
-          if (!sourceInfo.isFile() && !sourceInfo.isDirectory()) throw fail(400, 'unsupported_file_type', '只支援移動一般檔案與資料夾。');
-          if (!(await stat(destinationDirectory.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到目的地資料夾。');
-          if (sourceInfo.isDirectory()) {
-            const relativeDestination = path.relative(source, destinationDirectory.target);
-            if (!relativeDestination || (relativeDestination !== '..' && !relativeDestination.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDestination))) {
-              throw fail(400, 'cannot_move_into_self', '資料夾不能移至自己或其子資料夾內。');
-            }
-          }
-          const destination = path.join(destinationDirectory.target, parts.at(-1));
-          if (destination === source) return json(res, 200, { ok: true, unchanged: true });
-          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...relativeParts(body.destinationPath || ''), parts.at(-1)].join('/')}`;
-          return await withPathLocks([source, destination], async () => {
-            if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
-            await rename(source, destination);
-            return json(res, 200, { ok: true });
-          });
-        }
-        if (route === '/api/files/copy' && method === 'POST') {
-          const body = await readJson(req);
-          const shareId = String(body.shareId || '');
-          requirePermission(user, shareId, true);
-          const { root } = shareRoot(shareId);
-          const { target: source, parts } = resolveShareInside(root, body.path || '');
-          if (!parts.length) throw fail(400, 'cannot_copy_root', '不能複製資料空間本身。');
-          const destinationDirectory = resolveShareInside(root, body.destinationPath || '');
-          await rejectSymlinkTraversal(dataDir, root, source);
-          await rejectSymlinkTraversal(dataDir, root, destinationDirectory.target);
-          const sourceInfo = await lstat(source).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-          if (!sourceInfo || sourceInfo.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
-          if (!(await stat(destinationDirectory.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到目的地資料夾。');
-          if (sourceInfo.isDirectory()) {
-            const relativeDestination = path.relative(source, destinationDirectory.target);
-            if (!relativeDestination || (relativeDestination !== '..' && !relativeDestination.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDestination))) {
-              throw fail(400, 'cannot_copy_into_self', '資料夾不能複製至自己或其子資料夾內。');
-            }
-          }
-          const destination = path.join(destinationDirectory.target, parts.at(-1));
-          if (auditEvent) auditEvent.target = `${parts.join('/')} → ${[...relativeParts(body.destinationPath || ''), parts.at(-1)].join('/')}`;
-          return await withPathLocks([source, destination], async () => {
-            if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
-            const measurement = await measureCopyTree(source);
-            const free = await statfs(dataDir, { bigint: true });
-            const availableBytes = free.bavail * free.bsize;
-            if (measurement.bytes > availableBytes) throw fail(507, 'insufficient_storage', 'Nanako 資料空間所在磁碟容量不足。');
-            const temporary = path.join(destinationDirectory.target, `.localnas-copy-${crypto.randomUUID()}.tmp`);
-            try {
-              await copyManagedTree(source, temporary);
-              if (await itemExists(destination)) throw fail(409, 'already_exists', '目的地已有同名項目。');
-              await rename(temporary, destination);
-            } catch (error) {
-              await rm(temporary, { recursive: true, force: true }).catch(() => {});
-              throw error;
-            }
-            return json(res, 201, { ok: true, entries: measurement.entries, bytes: measurement.bytes });
-          });
-        }
-        if (route === '/api/upload' && method === 'POST') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId, true);
-          const { root } = shareRoot(shareId);
-          const parent = resolveShareInside(root, url.searchParams.get('path') || '');
-          const name = safeName(url.searchParams.get('name') || '');
-          if (auditEvent) auditEvent.target = `${url.searchParams.get('path') ? `${url.searchParams.get('path')}/` : ''}${name}`.slice(0, 512);
-          await rejectSymlinkTraversal(dataDir, root, parent.target);
-          if (!(await stat(parent.target).catch(() => null))?.isDirectory()) throw fail(404, 'folder_not_found', '找不到上層資料夾。');
-          const target = path.join(parent.target, name);
-          if (await stat(target).catch(() => null)) throw fail(409, 'already_exists', '同名項目已存在。');
-          const tempPath = path.join(parent.target, `.localnas-upload-${crypto.randomUUID()}.tmp`);
-          let size = 0;
-          const limiter = new Transform({
-            transform(chunk, encoding, callback) { size += chunk.length; callback(size > MAX_UPLOAD_BYTES ? fail(413, 'file_too_large', '單一檔案上限為 5 GiB。') : null, chunk); },
-          });
-          try {
-            await pipeline(req, limiter, createWriteStream(tempPath, { flags: 'wx' }));
-            await withPathLock(target, async () => {
-              if (await itemExists(target)) throw fail(409, 'already_exists', '同名項目已存在。');
-              await rename(tempPath, target);
-            });
-          } catch (error) {
-            await rm(tempPath, { force: true }).catch(() => {});
-            throw error;
-          }
-          return json(res, 201, { ok: true, size });
-        }
-        if (route === '/api/preview' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId);
-          const { root } = shareRoot(shareId);
-          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(dataDir, root, target);
-          const info = await stat(target).catch(() => null);
-          if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
-          const contentType = mediaTypes.get(path.extname(target).toLowerCase());
-          if (!contentType) throw fail(415, 'preview_not_supported', '目前不支援預覽或播放這個檔案格式，請下載查看。');
-
-          const rangeHeader = req.headers.range;
-          if (rangeHeader && auditEvent) auditEvent = null;
-          let range = null;
-          if (rangeHeader) {
-            const match = /^bytes=(\d*)-(\d*)$/iu.exec(rangeHeader.trim());
-            let start; let end;
-            if (match && info.size > 0) {
-              if (!match[1]) {
-                const suffixLength = Number(match[2]);
-                if (Number.isSafeInteger(suffixLength) && suffixLength > 0) {
-                  start = Math.max(info.size - suffixLength, 0);
-                  end = info.size - 1;
-                }
-              } else {
-                start = Number(match[1]);
-                end = match[2] ? Number(match[2]) : info.size - 1;
-                if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start && start < info.size) {
-                  end = Math.min(end, info.size - 1);
-                } else {
-                  start = undefined;
-                }
-              }
-            }
-            if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= info.size) {
-              return json(res, 416, { error: 'invalid_range', message: '無法讀取指定的檔案範圍。' }, {
-                'Accept-Ranges': 'bytes', 'Content-Range': `bytes */${info.size}`,
-              });
-            }
-            range = { start, end };
-          }
-
-          const fileName = parts.at(-1) || 'media';
-          const headers = {
-            'Content-Type': contentType,
-            'Content-Length': range ? range.end - range.start + 1 : info.size,
-            'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`,
-            'Accept-Ranges': 'bytes',
-            'Cache-Control': 'no-store',
-          };
-          if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${info.size}`;
-          res.writeHead(range ? 206 : 200, headers);
-          const stream = createReadStream(target, range || undefined);
-          stream.on('error', () => res.destroy());
-          stream.pipe(res);
-          return;
-        }
-        if (route === '/api/download' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId);
-          const { root } = shareRoot(shareId);
-          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
-          await rejectSymlinkTraversal(dataDir, root, target);
-          const info = await stat(target).catch(() => null);
-          if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
-          const name = parts.at(-1) || 'download';
-          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': info.size, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'Cache-Control': 'no-store' });
-          return createReadStream(target).pipe(res);
-        }
-        if (route === '/api/files' && method === 'DELETE') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId, true);
-          const { share, root } = shareRoot(shareId);
-          const { target, parts } = resolveShareInside(root, url.searchParams.get('path') || '');
-          if (!parts.length) throw fail(400, 'cannot_delete_root', '不能刪除分享資料夾本身。');
-          await rejectSymlinkTraversal(dataDir, root, target);
-          const info = await lstat(target).catch(() => null);
-          if (!info || info.isSymbolicLink()) throw fail(404, 'file_not_found', '找不到項目。');
-          const id = crypto.randomUUID();
-          const storedPath = managedTrashPath(share.id, id);
-          await rejectSymlinkTraversal(dataDir, dataDir, path.dirname(storedPath), false);
-          await mkdir(path.dirname(storedPath), { recursive: true });
-          await rejectSymlinkTraversal(dataDir, dataDir, storedPath, false);
-          await rename(target, storedPath);
-          try {
-            db.prepare(`INSERT INTO trash_items(id, share_id, original_path, stored_path, item_name, is_directory, deleted_by, deleted_at) VALUES(?,?,?,?,?,?,?,?)`)
-              .run(id, share.id, parts.join('/'), storedPath, parts.at(-1), Number(info.isDirectory()), user.id, new Date().toISOString());
-          } catch (error) {
-            await rename(storedPath, target).catch(() => {});
-            throw error;
-          }
-          return json(res, 200, { ok: true });
-        }
-        if (route === '/api/trash' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId') || '';
-          requirePermission(user, shareId, true);
-          shareRoot(shareId);
-          const rows = db.prepare(`SELECT id, item_name AS name, is_directory AS isDirectory, deleted_at AS deletedAt FROM trash_items WHERE share_id = ? ORDER BY deleted_at DESC`).all(shareId);
-          return json(res, 200, { items: rows.map((row) => ({ ...row, isDirectory: Boolean(row.isDirectory) })) });
-        }
-        if (route === '/api/trash/restore' && method === 'POST') {
-          const body = await readJson(req);
-          const row = db.prepare('SELECT * FROM trash_items WHERE id = ?').get(String(body.id || ''));
-          if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
-          if (auditEvent) auditEvent.target = row.item_name;
-          requirePermission(user, row.share_id, true);
-          const { root } = shareRoot(row.share_id);
-          const destination = resolveShareInside(root, row.original_path);
-          await rejectSymlinkTraversal(dataDir, root, destination.target, false);
-          const parentInfo = await stat(path.dirname(destination.target)).catch(() => null);
-          if (!parentInfo?.isDirectory()) throw fail(409, 'restore_parent_missing', '原本的資料夾已不存在，請先建立資料夾。');
-          if (await stat(destination.target).catch(() => null)) throw fail(409, 'restore_conflict', '原位置已有同名項目，請先重新命名或移動該項目。');
-          const storedPath = managedTrashPath(row.share_id, row.id);
-          await rejectSymlinkTraversal(dataDir, dataDir, storedPath);
-          await rename(storedPath, destination.target);
-          db.prepare('DELETE FROM trash_items WHERE id = ?').run(row.id);
-          return json(res, 200, { ok: true });
-        }
-        if (route === '/api/trash' && method === 'DELETE') {
-          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以永久刪除項目。');
-          const id = url.searchParams.get('id') || '';
-          const row = db.prepare('SELECT * FROM trash_items WHERE id = ?').get(id);
-          if (!row) throw fail(404, 'trash_item_not_found', '找不到資源回收桶項目。');
-          if (auditEvent) auditEvent.target = row.item_name;
-          shareRoot(row.share_id);
-          const storedPath = managedTrashPath(row.share_id, row.id);
-          await rejectSymlinkTraversal(dataDir, dataDir, storedPath);
-          await rm(storedPath, { recursive: true, force: true });
-          db.prepare('DELETE FROM trash_items WHERE id = ?').run(id);
-          return json(res, 200, { ok: true });
-        }
-        if (route === '/api/users' && method === 'GET') {
-          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
-          const users = db.prepare('SELECT id, username, role, created_at AS createdAt, is_active AS isActive FROM users ORDER BY username COLLATE NOCASE').all();
-          for (const listedUser of users) {
-            listedUser.permissions = allShares.all().map((share) => {
-              const grant = getPerm.get(listedUser.id, share.id) || { can_read: 0, can_write: 0 };
-              return { shareId: share.id, canRead: Boolean(grant.can_read), canWrite: Boolean(grant.can_write) };
-            });
-          }
-          return json(res, 200, { users });
-        }
-        if (route === '/api/users' && method === 'POST') {
-          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
-          const body = await readJson(req);
-          const username = validateUsername(body.username);
-          if (auditEvent) auditEvent.target = username;
-          if (findUser.get(username)) throw fail(409, 'username_taken', '這個帳號已經有人使用。');
-          const pass = await passwordHash(body.password);
-          const userId = crypto.randomUUID();
-          db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-            .run(userId, username, pass.salt, pass.hash, 'user', new Date().toISOString());
-          const grants = Array.isArray(body.permissions) ? body.permissions : [];
-          const grant = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
-          for (const item of grants) {
-            if (!item || typeof item.shareId !== 'string' || !findShare.get(item.shareId)) continue;
-            const canRead = Boolean(item.canRead);
-            const canWrite = canRead && Boolean(item.canWrite);
-            grant.run(userId, item.shareId, Number(canRead), Number(canWrite));
-          }
-          return json(res, 201, { user: getUserById.get(userId) });
-        }
-        if (route.startsWith('/api/users/') && method === 'PATCH') {
-          if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
-          const targetId = route.slice('/api/users/'.length);
-          if (!/^[0-9a-f-]{36}$/iu.test(targetId)) throw fail(404, 'user_not_found', '找不到這個使用者。');
-          if (targetId === user.id) throw fail(400, 'cannot_edit_self', '不能透過此畫面停用或修改自己的帳號權限。');
-          const targetUser = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(targetId);
-          if (!targetUser || targetUser.role !== 'user') throw fail(404, 'user_not_found', '找不到可管理的使用者。');
-          if (auditEvent) auditEvent.target = targetUser.username;
-          const body = await readJson(req);
-          if (typeof body.isActive !== 'boolean' || !Array.isArray(body.permissions)) throw fail(400, 'invalid_user_update', '請提供帳號啟用狀態與資料空間權限。');
-          const grants = new Map();
-          for (const item of body.permissions) {
-            if (!item || typeof item.shareId !== 'string' || !findShare.get(item.shareId)) throw fail(400, 'invalid_permission', '資料空間權限設定不正確。');
-            const canRead = Boolean(item.canRead);
-            grants.set(item.shareId, { canRead, canWrite: canRead && Boolean(item.canWrite) });
-          }
-          db.exec('BEGIN IMMEDIATE');
-          try {
-            db.prepare('DELETE FROM share_permissions WHERE user_id = ?').run(targetId);
-            const grantPermission = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
-            for (const [shareId, grant] of grants) grantPermission.run(targetId, shareId, Number(grant.canRead), Number(grant.canWrite));
-            db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(Number(body.isActive), targetId);
-            if (!body.isActive) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
-            db.exec('COMMIT');
-            if (!body.isActive) await lockVaultKey(targetId);
-          } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
-          }
-          return json(res, 200, { user: { ...getUserById.get(targetId), permissions: allShares.all().map((share) => {
-            const grant = getPerm.get(targetId, share.id) || { can_read: 0, can_write: 0 };
-            return { shareId: share.id, canRead: Boolean(grant.can_read), canWrite: Boolean(grant.can_write) };
-          }) } });
-        }
+        if (await filesRouter({
+          req, res, method, route, url, user,
+          getAuditEvent: () => auditEvent,
+          setAuditTarget: (target) => { if (auditEvent) auditEvent.target = target; },
+          disableAudit: () => { auditEvent = null; },
+        })) return;
+        if (await authRouter.handleUsersRoute({
+          req, res, method, route, user,
+          setAuditTarget: (target) => { if (auditEvent) auditEvent.target = target; },
+        })) return;
         if (route === '/api/audit-settings' && method === 'GET') {
           if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以查看操作紀錄設定。');
           return json(res, 200, { retentionDays: readAuditRetentionDays(), options: AUDIT_RETENTION_OPTIONS });
