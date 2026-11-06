@@ -7,7 +7,7 @@ import { finished, pipeline } from 'node:stream/promises';
 import { fail, json, mediaTypes, parseByteRange, readJson, writeResponseChunk } from './http-utils.mjs';
 import { rejectSymlinkTraversal, resolveShareInside, safeName } from './path-guards.mjs';
 import { hashManagedFile } from './duplicates.mjs';
-import { clearThrottle, getThrottle, recordFailure } from './throttle-store.mjs';
+import { clearThrottle, getThrottle, recordFailure, ThrottleCapacityError } from './throttle-store.mjs';
 import {
   copyVaultBackupObject,
   createVaultBackup,
@@ -208,7 +208,14 @@ export function createVaultRouter(ctx) {
       if (attempt?.lockedUntil > timestamp) throw fail(429, 'vault_unlock_throttled', '嘗試次數過多，請稍後再解鎖加密空間。');
     }
     function recordVaultUnlockFailure(key, timestamp = now()) {
-      recordFailure(db, 'vault_unlock', key, timestamp);
+      try {
+        recordFailure(db, 'vault_unlock', key, timestamp);
+      } catch (error) {
+        if (error instanceof ThrottleCapacityError) {
+          throw fail(429, 'vault_unlock_throttled', '嘗試次數過多，請稍後再解鎖加密空間。');
+        }
+        throw error;
+      }
     }
 
   function matchesVaultRoute(method, route) {
