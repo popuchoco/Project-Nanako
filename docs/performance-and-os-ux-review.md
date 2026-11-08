@@ -44,7 +44,30 @@ Gaia 的 [window.css](https://github.com/mozilla-b2g/gaia/blob/master/apps/syste
 
 ## 記憶體基準與後續量測
 
-目前沒有跨多台 Windows 電腦的可比較 RAM 基準；上述只能確認封裝內容與程式中的資源管理策略，不能宣稱記憶體已減少特定百分比。下一步效能驗收應在同一台測試機、同一份 NanakoData 下記錄：
+目前只有單一 Windows 電腦的一次初始 RAM 基準，尚無跨裝置可比較資料；以下數字不能用來宣稱記憶體已減少特定百分比。
+
+### Windows 單機初始實測（2026-11-08）
+
+在 Windows 10 專業版 x64（build 19045）、AMD Ryzen 5 7600、15.15 GiB 可見實體記憶體的電腦，使用 Electron 45.2.2 與 commit `0970ca1` 執行 [Windows 記憶體量測腳本](../scripts/measure-windows-memory.ps1)。測試建立獨立可攜式資料目錄及一次性本機管理員，只使用合成檔案：根目錄 1,000 個文字檔、1,000 張 1×1 PNG、1,000 筆影音索引（999 個空白 MP3 與一段由 Chromium `MediaRecorder` 產生的 167,444-byte WebM）。影片實際播放成功，解析度 320×180、`readyState=4`。測完後腳本關閉 Electron 並刪除整個合成 `NanakoData`；不會改動使用者資料、SMB、Windows 服務或防火牆。
+
+每個互動階段約每兩秒取樣六次並取中位數；閒置基準是在首頁載入首批 100 列後先等 60 秒，播放器／所有視窗關閉後分別再等 30 秒。Process tree 數字是 Nanako Electron 主程序與其 renderer、GPU、utility 等子程序各自的計數器加總；Working Set 加總會重複計入程序間共享頁面，不等同唯一實體 RAM。Private Bytes 為各程序 `PrivateMemorySize64` 加總；Renderer 欄只計 `--type=renderer` 程序的 Private Bytes。全程維持一個 renderer。
+
+| 狀態 | 全程序 Working Set 中位數 | 全程序 Private Bytes 中位數 | Renderer Private Bytes 中位數 |
+| --- | ---: | ---: | ---: |
+| 閒置 60 秒後；檔案首批 100／共 1,002 項 | 388.18 MiB | 262.58 MiB | 41.11 MiB |
+| 檔案清單載入下一批，共 200 列 | 391.42 MiB | 264.19 MiB | 46.51 MiB |
+| 相簿首批 48 張／共 1,000 張 | 408.79 MiB | 284.28 MiB | 50.17 MiB |
+| 相簿載入下一批，共 96 張 | 407.88 MiB | 291.94 MiB | 50.93 MiB |
+| 播放清單首批 48 筆／共 1,000 筆 | 421.13 MiB | 330.47 MiB | 57.99 MiB |
+| 播放清單載入全部 1,000 筆 | 437.08 MiB | 353.90 MiB | 75.71 MiB |
+| 合成 WebM 播放中 | 444.12 MiB | 325.29 MiB | 75.93 MiB |
+| 關閉播放器並等待 30 秒 | 435.25 MiB | 319.87 MiB | 72.38 MiB |
+| 檔案視窗開啟／最小化／還原／關閉 20 次 | 458.06 MiB | 340.20 MiB | 85.18 MiB |
+| 60 次視窗快速切換後，關閉全部並等待 30 秒 | 457.44 MiB | 375.03 MiB | 82.65 MiB |
+
+這次量測中，關閉播放器後 30 秒 renderer Private Bytes 約比閒置中位數高 31 MiB；完成 20 次視窗循環與 60 次切換、關閉全部視窗並等待 30 秒後，約高 42 MiB。這是需要用 Chromium heap／native memory profiler 重複檢查的**保留記憶體現象**，但單次 Working Set／Private Bytes 取樣不足以判定為記憶體洩漏，也不能區分可重用快取、GC 尚未回收或真正被引用的物件。量測原始 CSV 與 JSON 報告由腳本寫入忽略目錄 `work/memory-measurement-<timestamp>/`；目前這次執行報告位於工作目錄中的 `work/memory-measurement-20261108-183858/`。
+
+後續效能驗收仍需在同一台測試機、同一份 NanakoData 下重複運行並比較：
 
 - 啟動後桌面閒置 60 秒的 Nanako/Electron 整體 Working Set 與 Private Bytes。
 - 開啟大量檔案清單（每批 100 列）、1,000 張圖片索引（每批 48 張）時，初始批次與載入下一批的 renderer process 記憶體。
