@@ -1,11 +1,21 @@
 import { fail, json } from './http-utils.mjs';
 
 export function createSmbRouter(ctx) {
-  const { smbStatusProbe, collectWindowsExecutionState, listNetworkInterfaces, getPort } = ctx;
+  const { smbStatusProbe, collectWindowsExecutionState, listNetworkInterfaces, getPort, externalNetworkProbe } = ctx;
 
   async function handleSmbRoute({ res, method, route, user }) {
     if (route === '/api/network' && method === 'GET') {
       json(res, 200, { host: '127.0.0.1', port: getPort(), localOnly: true, interfaces: listNetworkInterfaces() });
+      return true;
+    }
+    if (route === '/api/network/test' && method === 'POST') {
+      const interfaces = listNetworkInterfaces();
+      const external = await externalNetworkProbe();
+      json(res, 200, {
+        testedAt: new Date().toISOString(),
+        internal: { status: interfaces.length ? 'available' : 'no-interface', host: '127.0.0.1', port: getPort(), localOnly: true, interfaces },
+        external,
+      });
       return true;
     }
     if (route === '/api/smb/status' && method === 'GET') {

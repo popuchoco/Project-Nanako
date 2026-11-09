@@ -30,8 +30,10 @@ async function setupServer(t, options = {}) {
     const body = contentType.includes('application/json') ? await response.json() : await response.text();
     return { response, body };
   }
-  async function setup() {
-    const { response, body } = await request('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ username: 'admin', password: 'local-test-passphrase-2026' }) });
+  async function setup(displayName) {
+    const setupPayload = { username: 'admin', password: 'local-test-passphrase-2026' };
+    if (displayName !== undefined) setupPayload.displayName = displayName;
+    const { response, body } = await request('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify(setupPayload) });
     assert.equal(response.status, 201);
     const cookie = response.headers.get('set-cookie').split(';')[0];
     const shares = await request('/api/shares', { headers: { Cookie: cookie } });
@@ -157,6 +159,87 @@ test('requests require a loopback peer, bound Host, and allowed Origin for mutat
   assert.equal(invalidHostAlone.body.error, 'host_denied');
 
   // This helper binds to 127.0.0.1, so a non-loopback remoteAddress cannot be injected reliably without a socket hack.
+});
+
+test('display names are separate from login accounts and can be updated by each user', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, user: initialAdmin } = await setup('初始管理員');
+  assert.equal(initialAdmin.displayName, '初始管理員');
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+  const updated = await request('/api/me', {
+    method: 'PATCH', headers: auth, body: JSON.stringify({ displayName: '  小夏 🌸  ' }),
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.body.user.displayName, '小夏 🌸');
+  assert.equal(updated.body.user.username, 'admin');
+
+  const current = await request('/api/me', { headers: { Cookie: cookie } });
+  assert.equal(current.body.user.displayName, '小夏 🌸');
+  assert.equal(current.body.user.username, 'admin');
+
+  const tooLong = await request('/api/me', {
+    method: 'PATCH', headers: auth, body: JSON.stringify({ displayName: '名'.repeat(41) }),
+  });
+  assert.equal(tooLong.response.status, 400);
+  assert.equal(tooLong.body.error, 'invalid_display_name');
+
+  const created = await request('/api/users', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ username: 'family-member', displayName: '家人', password: 'family-member-passphrase-2026', permissions: [] }),
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.body.user.username, 'family-member');
+  assert.equal(created.body.user.displayName, '家人');
+  const listed = await request('/api/users', { headers: { Cookie: cookie } });
+  assert.equal(listed.body.users.find((item) => item.username === 'family-member').displayName, '家人');
+});
+
+test('network diagnostics probe the outside only on request and return local-only details', async (t) => {
+  let probes = 0;
+  const { request, setup } = await setupServer(t, {
+    externalNetworkProbe: async () => { probes += 1; return { status: 'connected', latencyMs: 12, endpoint: 'test.invalid', httpStatus: 200 }; },
+  });
+  const { cookie } = await setup();
+  const initial = await request('/api/network', { headers: { Cookie: cookie } });
+  assert.equal(initial.body.localOnly, true);
+  assert.equal(probes, 0, 'opening network information must not contact the external test endpoint');
+  const checked = await request('/api/network/test', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}',
+  });
+  assert.equal(checked.response.status, 200);
+  assert.equal(checked.body.internal.localOnly, true);
+  assert.equal(checked.body.internal.host, '127.0.0.1');
+  assert.equal(checked.body.external.status, 'connected');
+  assert.equal(checked.body.external.latencyMs, 12);
+  assert.equal(probes, 1);
+});
+
+test('task endpoint reports concurrent uploads and recent transfer rates for the signed-in user', async (t) => {
+  const { request, setup } = await setupServer(t);
+  const { cookie, shareId } = await setup();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(64 * 1024));
+      setTimeout(() => { controller.enqueue(new Uint8Array(64 * 1024)); controller.close(); }, 350);
+    },
+  });
+  const uploadPromise = request(`/api/upload?${new URLSearchParams({ shareId, path: '', name: 'task-monitor.bin' })}`, {
+    method: 'POST', headers: { Cookie: cookie }, body: stream, duplex: 'half',
+  });
+  let active;
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    active = await request('/api/tasks', { headers: { Cookie: cookie } });
+    if (active.body.counts?.upload === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(active.body.counts.upload, 1);
+  assert.equal(active.body.counts.total, 1);
+  assert.equal(active.body.transfers[0].name, 'task-monitor.bin');
+  assert.ok(active.body.transfers[0].bytesTransferred > 0);
+  await uploadPromise;
+  const idle = await request('/api/tasks', { headers: { Cookie: cookie } });
+  assert.deepEqual(idle.body.counts, { upload: 0, download: 0, total: 0 });
 });
 
 test('concurrent initial setup creates exactly one admin', async (t) => {

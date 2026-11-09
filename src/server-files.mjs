@@ -21,7 +21,7 @@ const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 export function createFilesRouter(ctx) {
   const {
     db, dataDir, requirePermission, shareRoot, permission, managedTrashPath,
-    withPathLock, withPathLocks,
+    withPathLock, withPathLocks, beginTransfer,
   } = ctx;
 
   const fileRoutes = new Set([
@@ -197,9 +197,11 @@ export function createFilesRouter(ctx) {
           const target = path.join(parent.target, name);
           if (await stat(target).catch(() => null)) throw fail(409, 'already_exists', '同名項目已存在。');
           const tempPath = path.join(parent.target, `.localnas-upload-${crypto.randomUUID()}.tmp`);
+          const contentLength = Number(req.headers['content-length']);
+          const transfer = beginTransfer(user.id, 'upload', name, Number.isSafeInteger(contentLength) && contentLength >= 0 ? contentLength : null);
           let size = 0;
           const limiter = new Transform({
-            transform(chunk, encoding, callback) { size += chunk.length; callback(size > MAX_UPLOAD_BYTES ? fail(413, 'file_too_large', '單一檔案上限為 5 GiB。') : null, chunk); },
+            transform(chunk, encoding, callback) { size += chunk.length; transfer.record(chunk.length); callback(size > MAX_UPLOAD_BYTES ? fail(413, 'file_too_large', '單一檔案上限為 5 GiB。') : null, chunk); },
           });
           try {
             await pipeline(req, limiter, createWriteStream(tempPath, { flags: 'wx' }));
@@ -210,7 +212,7 @@ export function createFilesRouter(ctx) {
           } catch (error) {
             await rm(tempPath, { force: true }).catch(() => {});
             throw error;
-          }
+          } finally { transfer.finish(); }
           return json(res, 201, { ok: true, size });
         }
         if (route === '/api/preview' && method === 'GET') {
@@ -280,7 +282,10 @@ export function createFilesRouter(ctx) {
           if (!info?.isFile()) throw fail(404, 'file_not_found', '找不到檔案。');
           const name = parts.at(-1) || 'download';
           res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': info.size, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'Cache-Control': 'no-store' });
-          return createReadStream(target).pipe(res);
+          const transfer = beginTransfer(user.id, 'download', name, info.size);
+          const meter = new Transform({ transform(chunk, encoding, callback) { transfer.record(chunk.length); callback(null, chunk); } });
+          void pipeline(createReadStream(target), meter, res).catch(() => {}).finally(() => transfer.finish());
+          return true;
         }
         if (route === '/api/files' && method === 'DELETE') {
           const shareId = url.searchParams.get('shareId') || '';

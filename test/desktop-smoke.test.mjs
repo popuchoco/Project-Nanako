@@ -215,6 +215,22 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     (value) => value?.visible && value?.writable,
     'the initial writable file view',
   );
+  await running.devtools.evaluate(`(() => {
+    document.querySelector('#desktop-account').click();
+    document.querySelector('#display-name-button').click();
+    const form = document.querySelector('#display-name-form');
+    form.elements.displayName.value = 'Nanako 管理員';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  const customIdentity = await waitForValue(
+    running.devtools,
+    `fetch('/api/me').then((response) => response.json()).then(({ user }) => ({ account: document.querySelector('#account-name')?.textContent?.trim(), username: user.username, displayName: user.displayName }))`,
+    (value) => value?.displayName === 'Nanako 管理員',
+    'saving a separate display name without changing the login account',
+  );
+  assert.equal(customIdentity.account, 'Nanako 管理員');
+  assert.equal(customIdentity.username, adminUsername);
   const shellLayout = await running.devtools.evaluate(`(() => {
     const bar = document.querySelector('.system-bar');
     const launcher = document.querySelector('#launcher-toggle');
@@ -311,6 +327,18 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     'successful user creation feedback',
   );
   assert.equal(createdUser.username, '', 'the user form should reset only after successful creation.');
+  await running.devtools.evaluate(`(() => {
+    document.querySelector('#launcher-toggle').click();
+    document.querySelector('#launcher-menu [data-open-view="tasks"]').click();
+    return true;
+  })()`);
+  const taskView = await waitForValue(
+    running.devtools,
+    `({ visible: !document.querySelector('#view-tasks').hidden, total: document.querySelector('#task-total-count').textContent, status: document.querySelector('#task-poll-status').textContent })`,
+    (value) => value?.visible && value?.status.includes('自動更新'),
+    'the task manager live transfer summary',
+  );
+  assert.equal(taskView.total, '0');
   await closeNanako(running);
   running = null;
 
@@ -328,7 +356,7 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     (value) => value?.files.includes(folderName),
     'the persisted folder after restart',
   );
-  assert.equal(retained.account, adminUsername);
+  assert.equal(retained.account, 'Nanako 管理員');
   await running.devtools.evaluate(`(() => {
     document.querySelector('#launcher-toggle').click();
     document.querySelector('#launcher-menu [data-open-view="player"]').click();

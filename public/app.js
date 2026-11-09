@@ -20,14 +20,14 @@ const state = {
   vaultSourceShareId: '', vaultSourcePath: '', vaultSourceItems: [], vaultItems: [], vaultPendingImport: null, vaultPendingDelete: null, vaultPreviewId: '', vaultLockRequest: null, vaultStatusTimer: null,
   vaultRecoveryCodePending: false, vaultImportRunning: false, vaultImportPollTimer: null,
   archiveRunning: false, archiveProgressTimer: null,
-  windows: new Map(), windowZ: 10, desktopClockTimer: null,
+  windows: new Map(), windowZ: 10, desktopClockTimer: null, taskPollTimer: null,
 };
 const appDefinitions = {
   files: { name: '檔案管理', icon: '▤' }, duplicates: { name: '檔案去重', icon: '⧉' },
   album: { name: '相簿', icon: '▧' }, player: { name: '播放器', icon: '▶' },
   trash: { name: '資源回收桶', icon: '⌫' }, vault: { name: '加密空間', icon: '◉' }, users: { name: '使用者與權限', icon: '♙', adminOnly: true },
   computer: { name: '儲存空間', icon: '▣' }, system: { name: '電腦資訊', icon: '▦', adminOnly: true },
-  settings: { name: '系統設定與紀錄', icon: '⚙', adminOnly: true }, network: { name: '網路狀態', icon: '⌁' },
+  settings: { name: '系統設定與紀錄', icon: '⚙', adminOnly: true }, network: { name: '網路狀態', icon: '⌁' }, tasks: { name: '任務管理', icon: '⇅' },
 };
 const mediaProfiles = [
   { label: 'MP4／H.264＋AAC', kind: 'video', mime: 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"', extension: '.mp4、.m4v' },
@@ -185,6 +185,7 @@ function showAuth(needsSetup) {
   $('#auth-description').textContent = needsSetup ? '建立只有這台電腦使用的管理員帳號。資料不會送到外部服務。' : '請使用本機帳號登入。這個帳號不會連結任何雲端服務。';
   $('#auth-submit').textContent = needsSetup ? '建立管理員' : '登入';
   $('#auth-password').autocomplete = needsSetup ? 'new-password' : 'current-password';
+  $('#auth-display-name-field').hidden = !needsSetup;
   $('#auth-error').hidden = true;
   $('#auth-form').dataset.mode = needsSetup ? 'setup' : 'login';
 }
@@ -204,13 +205,20 @@ async function start() {
 function showApp() {
   $('#auth-screen').hidden = true;
   $('#app-shell').hidden = false;
-  $('#account-name').textContent = state.user.username;
+  updateAccountIdentity();
   document.querySelectorAll('.admin-only').forEach((item) => { item.hidden = state.user.role !== 'admin'; });
   updateDesktopClock();
   updateDesktopWidget();
   clearInterval(state.desktopClockTimer);
   state.desktopClockTimer = setInterval(updateDesktopClock, 15_000);
   loadShares().then(() => launchView('files')).catch((error) => notify(error.message, true));
+}
+
+function updateAccountIdentity() {
+  const displayName = state.user?.displayName?.trim() || state.user?.username || '';
+  $('#account-name').textContent = displayName;
+  $('#account-avatar').textContent = Array.from(displayName)[0] || '用';
+  $('#desktop-account').title = `${displayName}（登入帳號：${state.user?.username || ''}）`;
 }
 
 async function loadShares() {
@@ -321,6 +329,7 @@ function focusWindow(view, { record = true } = {}) {
   } else if (wasMinimized && (view === 'system' || view === 'duplicates')) {
     loadView(view);
   }
+  if (view === 'tasks') startTaskPolling();
 }
 
 function createAppWindow(view) {
@@ -390,6 +399,52 @@ function updateDesktopWidget() {
   if (!count) return;
   count.textContent = state.shares.length === 0 ? '尚未設定' : `${state.shares.length} 個`;
   count.title = state.shares.length ? state.shares.map((share) => share.name).join('、') : '目前沒有可存取的 Nanako 資料空間';
+}
+
+function formatTransferRate(bytesPerSecond) {
+  return `${formatSize(Math.max(0, Number(bytesPerSecond) || 0))}/秒`;
+}
+
+async function loadTasks() {
+  try {
+    const result = await api('/api/tasks');
+    $('#task-upload-rate').textContent = formatTransferRate(result.rates.uploadBytesPerSecond);
+    $('#task-download-rate').textContent = formatTransferRate(result.rates.downloadBytesPerSecond);
+    $('#task-upload-count').textContent = String(result.counts.upload);
+    $('#task-download-count').textContent = String(result.counts.download);
+    $('#task-total-count').textContent = String(result.counts.total);
+    $('#task-poll-status').textContent = `每秒自動更新 · ${new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+
+    const list = $('#task-transfer-list');
+    list.replaceChildren();
+    for (const item of result.transfers) {
+      const row = document.createElement('li'); row.className = `task-transfer task-${item.direction}`;
+      const identity = document.createElement('div'); identity.className = 'task-transfer-identity';
+      const title = document.createElement('strong'); title.textContent = item.name;
+      const details = document.createElement('small');
+      details.textContent = item.totalBytes === null ? `${formatSize(item.bytesTransferred)} 已傳輸` : `${formatSize(item.bytesTransferred)}／${formatSize(item.totalBytes)}`;
+      identity.append(title, details);
+      const kind = document.createElement('span'); kind.className = 'task-transfer-kind'; kind.textContent = item.direction === 'upload' ? '上傳中' : '下載中';
+      row.append(identity, kind);
+      if (item.totalBytes !== null && item.totalBytes > 0) {
+        const progress = document.createElement('progress'); progress.max = item.totalBytes;
+        progress.value = Math.min(item.bytesTransferred, item.totalBytes); progress.setAttribute('aria-label', `${item.name}${item.direction === 'upload' ? '上傳' : '下載'}進度`);
+        row.append(progress);
+      }
+      list.append(row);
+    }
+    $('#task-empty').hidden = result.transfers.length > 0;
+  } catch (error) {
+    $('#task-poll-status').textContent = `更新失敗：${error.message}`;
+  }
+}
+
+function startTaskPolling() {
+  clearInterval(state.taskPollTimer);
+  void loadTasks();
+  state.taskPollTimer = setInterval(() => {
+    if (!document.hidden && state.view === 'tasks') void loadTasks();
+  }, 1_000);
 }
 
 function toggleLauncherMenu(force) {
@@ -481,6 +536,7 @@ function closeWindow(view) {
   $('#window-content-bank').append(entry.panel);
   entry.element.remove();
   state.windows.delete(view);
+  if (view === 'tasks') { clearInterval(state.taskPollTimer); state.taskPollTimer = null; }
   if (state.view === view) {
     const next = [...state.windows.values()].filter((candidate) => candidate.status === 'open').sort((a, b) => b.z - a.z)[0];
     if (next) { focusWindow(next.view, { record: true }); next.element.querySelector('.window-titlebar').focus(); }
@@ -495,7 +551,7 @@ function closeAllWindows() {
     void api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
     state.duplicateScanId = ''; state.duplicateScanStatus = 'cancelled';
   }
-  clearTimeout(state.duplicatePollTimer); clearTimeout(state.systemRefreshTimer); clearInterval(state.desktopClockTimer);
+  clearTimeout(state.duplicatePollTimer); clearTimeout(state.systemRefreshTimer); clearInterval(state.desktopClockTimer); clearInterval(state.taskPollTimer); state.taskPollTimer = null;
   clearTimeout(state.fileSearchTimer); clearTimeout(state.albumSearchTimer); clearTimeout(state.playerSearchTimer);
   resetPlayer();
   if ($('#photo-dialog').open) $('#photo-dialog').close();
@@ -1522,11 +1578,14 @@ async function loadUsers() {
     for (const user of users) {
       const row = document.createElement('article'); row.className = 'user-card';
       const heading = document.createElement('div'); heading.className = 'user-row';
-      const name = document.createElement('strong'); name.textContent = user.username;
+      const identity = document.createElement('div'); identity.className = 'user-identity';
+      const name = document.createElement('strong'); name.textContent = user.displayName?.trim() || user.username;
+      const username = document.createElement('small'); username.textContent = `登入帳號：${user.username}`;
+      identity.append(name, username);
       const badges = document.createElement('div'); badges.className = 'user-badges';
       const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role === 'admin' ? '管理員' : '使用者';
       const status = document.createElement('span'); status.className = `user-role${user.isActive ? '' : ' user-disabled'}`; status.textContent = user.isActive ? '啟用中' : '已停用';
-      badges.append(role, status); heading.append(name, badges); row.append(heading);
+      badges.append(role, status); heading.append(identity, badges); row.append(heading);
       if (user.role === 'user') {
         const details = document.createElement('details'); details.className = 'user-permission-details';
         const summary = document.createElement('summary'); summary.textContent = '權限與帳號狀態'; details.append(summary);
@@ -1913,6 +1972,38 @@ async function loadNetwork() {
   catch (error) { notify(error.message, true); }
 }
 
+async function runNetworkCheck() {
+  const button = $('#network-test-button');
+  const message = $('#network-check-message');
+  button.disabled = true; message.textContent = '正在檢查本機網路介面與外網連線…';
+  try {
+    const result = await api('/api/network/test', { method: 'POST', body: JSON.stringify({}) });
+    const internal = result.internal;
+    $('#network-check-internal').textContent = internal.status === 'available'
+      ? `本機連線正常 · Nanako 僅監聽 ${internal.host}:${internal.port}（不對區域網路開放）`
+      : '沒有偵測到可用的網路介面。';
+    const interfaces = $('#network-check-interfaces'); interfaces.replaceChildren();
+    for (const item of internal.interfaces) {
+      const row = document.createElement('li');
+      const label = document.createElement('span'); label.textContent = item.name;
+      const address = document.createElement('span'); address.className = 'ip';
+      address.textContent = `${item.address} · ${item.family}${item.private ? ' · 私有 IPv4' : ''}`;
+      row.append(label, address); interfaces.append(row);
+    }
+    const external = result.external;
+    const externalLabels = {
+      connected: '已連線至網際網路', redirected: '外網回應遭重新導向，可能需要登入網路入口網站',
+      limited: '可連線，但測試端點回應異常', unreachable: '無法連線至外網測試端點', timeout: '外網檢測逾時',
+    };
+    const latency = Number.isFinite(external.latencyMs) ? ` · ${external.latencyMs} ms` : '';
+    $('#network-check-external').textContent = `${externalLabels[external.status] || '無法判定'}${latency} · ${external.endpoint}`;
+    message.textContent = `檢測完成：內網 ${internal.status === 'available' ? '可用' : '未偵測到介面'}；外網 ${externalLabels[external.status] || '無法判定'}。`;
+  } catch (error) {
+    message.textContent = `網路檢測失敗：${error.message}`;
+    $('#network-check-external').textContent = '無法取得檢測結果。';
+  } finally { button.disabled = false; }
+}
+
 async function loadSmbStatus() {
   const fields = {
     service: $('#smb-server-service'), port: $('#smb-port-status'), command: $('#smb-command-status'), elevation: $('#smb-elevation-status'),
@@ -2172,7 +2263,7 @@ async function loadSystem() {
 
 $('#auth-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const mode = formElement.dataset.mode; const errorBox = $('#auth-error'); errorBox.hidden = true;
-  try { const result = await api(mode === 'setup' ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) }); state.user = result.user; formElement.reset(); showApp(); }
+  try { const result = await api(mode === 'setup' ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), ...(mode === 'setup' ? { displayName: form.get('displayName') } : {}) }) }); state.user = result.user; formElement.reset(); showApp(); }
   catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
 });
 
@@ -2189,6 +2280,24 @@ $('#change-password-button').addEventListener('click', () => {
   const form = $('#change-password-form'); form.reset();
   const message = $('#change-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
   $('#change-password-dialog').showModal(); form.elements.currentPassword.focus();
+});
+$('#display-name-button').addEventListener('click', () => {
+  const form = $('#display-name-form');
+  form.reset();
+  form.elements.displayName.value = state.user?.displayName || '';
+  const message = $('#display-name-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
+  $('#display-name-dialog').showModal(); form.elements.displayName.focus();
+});
+$('#cancel-display-name').addEventListener('click', () => $('#display-name-dialog').close());
+$('#display-name-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); const message = $('#display-name-message');
+  submit.disabled = true;
+  try {
+    const { user } = await api('/api/me', { method: 'PATCH', body: JSON.stringify({ displayName: form.elements.displayName.value }) });
+    state.user = user; updateAccountIdentity(); $('#display-name-dialog').close(); closeLauncherMenu(); notify('顯示名稱已更新。');
+  } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
+  finally { submit.disabled = false; }
 });
 $('#cancel-change-password').addEventListener('click', () => $('#change-password-dialog').close());
 $('#change-password-form').addEventListener('submit', async (event) => {
@@ -2376,7 +2485,7 @@ $('#user-form').addEventListener('submit', async (event) => {
   });
   const message = $('#user-message');
   try {
-    await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), password: form.get('password'), permissions }) });
+    await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), displayName: form.get('displayName'), password: form.get('password'), permissions }) });
     formElement.reset();
     message.textContent = '使用者已建立。';
     message.classList.remove('error'); message.hidden = false; loadUsers();
@@ -2412,6 +2521,8 @@ $('#media-test-track').addEventListener('change', () => {
 });
 $('#media-test-run').addEventListener('click', testSelectedMedia);
 $('#refresh-system').addEventListener('click', loadSystem);
+$('#network-test-button').addEventListener('click', runNetworkCheck);
+$('#refresh-tasks').addEventListener('click', loadTasks);
 $('#audit-settings-form').addEventListener('submit', saveAuditSettings);
 $('#refresh-audit-logs').addEventListener('click', loadAuditLogs);
 $('#clear-audit-logs').addEventListener('click', () => { $('#clear-audit-confirm').value = ''; $('#confirm-clear-audit').disabled = true; $('#clear-audit-dialog').showModal(); $('#clear-audit-confirm').focus(); });

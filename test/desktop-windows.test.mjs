@@ -29,6 +29,8 @@ test('Windows desktop chrome is integrated with the app bar and hides the native
   assert.match(styles, /\.electron-windows-titlebar \.system-bar\s*\{[^}]*-webkit-app-region:\s*drag/s);
   assert.match(styles, /\.electron-windows-titlebar \.system-bar :is\([^{}]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag/s);
   assert.match(styles, /\.desktop-shortcuts\{overflow-x:hidden;overflow-y:auto\}/);
+  assert.match(styles, /@media\(hover:hover\) and \(pointer:fine\)\{\.desktop-icon:hover\{[^}]*transition-delay:130ms\}/);
+  assert.match(styles, /\.desktop-icon:focus-visible\{transition-delay:0ms\}/);
 });
 
 test('desktop shell contains independent Nanako application-window regions and switchers', async () => {
@@ -52,12 +54,18 @@ test('desktop shell contains independent Nanako application-window regions and s
   assert.match(html, /class="file-manager-sidebar"/);
   assert.match(html, /id="file-search"/);
   assert.match(html, /id="file-sort"/);
+  assert.match(html, /id="view-tasks"/);
+  assert.match(html, /id="network-test-button"/);
+  assert.match(html, /id="display-name-form"/);
   for (const category of ['image', 'video', 'audio', 'document']) assert.ok(html.includes(`data-file-category="${category}"`));
   assert.match(app, /windows:\s*new Map\(\)/);
   assert.match(app, /function createAppWindow\(view\)/);
   assert.match(app, /function focusWindow\(view/);
   assert.match(app, /function minimizeWindow\(view\)/);
   assert.match(app, /function closeWindow\(view\)/);
+  assert.match(app, /api\('\/api\/tasks'\)/);
+  assert.match(app, /api\('\/api\/network\/test'/);
+  assert.match(app, /function updateAccountIdentity\(\)/);
   assert.match(app, /function setFileCategory\(category\)/);
   assert.match(app, /filterAndSortFiles\(items/);
   assert.match(fileListing, /item\.name\.toLocaleLowerCase\('zh-TW'\)\.includes\(query\)/);

@@ -30,8 +30,10 @@ import {
   resolveShareInside,
 } from './path-guards.mjs';
 import { readWindowsSmbStatus } from './windows-smb-status.mjs';
+import { probeExternalNetwork } from './network-probe.mjs';
 import { isShareOperationAllowed } from './share-access.mjs';
 import { ensureThrottleSchema, pruneExpiredThrottles } from './throttle-store.mjs';
+import { createTransferMonitor } from './transfers.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,6 +51,7 @@ function initDatabase(dataDir) {
       id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_salt TEXT NOT NULL, password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('admin','user')), created_at TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
       is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
     );
     CREATE TABLE IF NOT EXISTS shares (
@@ -108,6 +111,7 @@ function initDatabase(dataDir) {
   ensureThrottleSchema(db);
   const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
   if (!userColumns.has('is_active')) db.exec('ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+  if (!userColumns.has('display_name')) db.exec("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
   const adminCount = Number(db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n);
   if (adminCount <= 1) {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_single_admin_idx ON users(role) WHERE role = 'admin'");
@@ -241,7 +245,7 @@ async function collectSystemInformation(dataDir) {
   };
 }
 
-export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus, now = () => Date.now() } = {}) {
+export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus, externalNetworkProbe = probeExternalNetwork, now = () => Date.now() } = {}) {
   if (!dataDir) dataDir = path.join(projectRoot, 'NanakoData', 'data');
   if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
     throw new Error('此原型僅允許本機連線；區域網路連線尚未開放。');
@@ -272,6 +276,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (info?.isSymbolicLink() || info?.isDirectory()) throw new Error('Nanako 資料庫檔案不可使用符號連結、重新解析點或資料夾。');
   }
   const db = initDatabase(dataDir);
+  const transferMonitor = createTransferMonitor({ now });
   pruneExpiredThrottles(db, now());
   const pathLocks = createPathLockManager();
   const { withPathLocks, withPathLock } = pathLocks;
@@ -344,7 +349,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
 
   const findUser = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE');
-  const getUserById = db.prepare('SELECT id, username, role, created_at, is_active AS isActive FROM users WHERE id = ?');
+  const getUserById = db.prepare('SELECT id, username, display_name AS displayName, role, created_at, is_active AS isActive FROM users WHERE id = ?');
   const findShare = db.prepare('SELECT * FROM shares WHERE id = ?');
   const getPerm = db.prepare(`SELECT can_read, can_write FROM share_permissions WHERE user_id = ? AND share_id = ?`);
   const allShares = db.prepare("SELECT id, name, created_at, storage_path, source_type FROM shares WHERE source_type = 'managed' AND storage_path IS NULL ORDER BY name COLLATE NOCASE");
@@ -370,7 +375,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     const perm = permission(user, shareId);
     if (!isShareOperationAllowed(user, perm, write ? 'write' : 'read')) throw fail(403, 'permission_denied', '你沒有這項操作的權限。');
   }
-  const filesRouter = createFilesRouter({ db, dataDir, requirePermission, shareRoot, permission, managedTrashPath, withPathLock, withPathLocks });
+  const filesRouter = createFilesRouter({ db, dataDir, requirePermission, shareRoot, permission, managedTrashPath, withPathLock, withPathLocks, beginTransfer: transferMonitor.begin });
   const vaultRouter = createVaultRouter({ db, dataDir, now, withPathLocks, withPathLock, ensureManagedDirectory, requirePermission, shareRoot });
   const authRouter = createAuthRouter({ db, dataDir, now, dummyPassword, lockVaultKey: vaultRouter.lockVaultKey, findUser, getUserById, findShare, getPerm, allShares });
 
@@ -380,7 +385,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
   const duplicatesRouter = createDuplicatesRouter({ db, dataDir, requirePermission, shareRoot, permission, getUserById, withPathLocks, managedTrashPath, writeOperationLog });
   const archiveRouter = createArchiveRouter({ dataDir, requirePermission, shareRoot });
-  const smbRouter = createSmbRouter({ smbStatusProbe, collectWindowsExecutionState, listNetworkInterfaces, getPort: () => server.address()?.port });
+  const smbRouter = createSmbRouter({ smbStatusProbe, collectWindowsExecutionState, listNetworkInterfaces, getPort: () => server.address()?.port, externalNetworkProbe });
 
   let closed = false;
   let allowedOrigins = new Set();
@@ -429,13 +434,15 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
         const inferredAudit = auditForRequest(user, method, route, url);
         if (inferredAudit) setAudit(user, inferredAudit.action, inferredAudit.target);
 
+        if (route === '/api/tasks' && method === 'GET') return json(res, 200, transferMonitor.snapshot(user.id));
+
         if (await vaultRouter.handleVaultRoute({ req, res, method, route, url, user })) return;
 
         if (route === '/api/activity' && method === 'POST') {
           const body = await readJson(req);
           const views = {
             files: '檔案管理', album: '相簿', player: '播放器', trash: '資源回收桶', vault: '加密空間',
-            duplicates: '檔案去重', users: '使用者與權限', computer: '儲存空間', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態',
+            duplicates: '檔案去重', users: '使用者與權限', computer: '儲存空間', system: '電腦資訊', settings: '系統設定與紀錄', network: '網路狀態', tasks: '任務管理',
           };
           const actionLabels = {
             open: '開啟畫面', focus: '切換作用中視窗', minimize: '最小化視窗',

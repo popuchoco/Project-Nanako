@@ -30,6 +30,16 @@ export function validateUsername(value) {
   return value;
 }
 
+export function validateDisplayName(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') throw fail(400, 'invalid_display_name', '顯示名稱須為文字。');
+  const displayName = value.normalize('NFC').trim();
+  if (Array.from(displayName).length > 40 || /[\u0000-\u001F\u007F-\u009F]/u.test(displayName)) {
+    throw fail(400, 'invalid_display_name', '顯示名稱最多 40 個字，且不可包含換行或控制字元。');
+  }
+  return displayName;
+}
+
 export async function passwordHash(password, salt = crypto.randomBytes(16)) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 256) {
     throw fail(400, 'weak_password', '密碼長度須為 12 至 256 個字元。');
@@ -70,6 +80,7 @@ export function createAuthRouter(ctx) {
       if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) throw fail(409, 'already_setup', '已完成初始設定。');
       const body = await readJson(req);
       const username = validateUsername(body.username);
+      const displayName = validateDisplayName(body.displayName);
       setAudit({ username }, '建立本機管理員', username);
       const pass = await passwordHash(body.password);
       const userId = crypto.randomUUID();
@@ -81,8 +92,8 @@ export function createAuthRouter(ctx) {
         if (Number(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) !== 0) {
           throw fail(409, 'already_setup', '已完成初始設定。');
         }
-        db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-          .run(userId, username, pass.salt, pass.hash, 'admin', createdAt);
+        db.prepare('INSERT INTO users(id, username, display_name, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?,?)')
+          .run(userId, username, displayName, pass.salt, pass.hash, 'admin', createdAt);
         db.prepare('INSERT INTO shares(id, name, created_at) VALUES(?,?,?)').run(shareId, '主資料夾', createdAt);
         db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,1,1)').run(userId, shareId);
         db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), userId, now() + SESSION_SECONDS * 1000);
@@ -147,6 +158,13 @@ export function createAuthRouter(ctx) {
       json(res, 200, { user });
       return true;
     }
+    if (route === '/api/me' && method === 'PATCH') {
+      const body = await readJson(req);
+      const displayName = validateDisplayName(body.displayName);
+      db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, user.id);
+      json(res, 200, { user: getUserById.get(user.id) });
+      return true;
+    }
     if (route === '/api/password' && method === 'POST') {
       const body = await readJson(req);
       const current = db.prepare('SELECT password_salt, password_hash FROM users WHERE id = ?').get(user.id);
@@ -168,7 +186,7 @@ export function createAuthRouter(ctx) {
   async function handleUsersRoute({ req, res, method, route, user, setAuditTarget }) {
     if (route === '/api/users' && method === 'GET') {
       if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
-      const users = db.prepare('SELECT id, username, role, created_at AS createdAt, is_active AS isActive FROM users ORDER BY username COLLATE NOCASE').all();
+      const users = db.prepare('SELECT id, username, display_name AS displayName, role, created_at AS createdAt, is_active AS isActive FROM users ORDER BY username COLLATE NOCASE').all();
       for (const listedUser of users) {
         listedUser.permissions = allShares.all().map((share) => {
           const grant = getPerm.get(listedUser.id, share.id) || { can_read: 0, can_write: 0 };
@@ -182,12 +200,13 @@ export function createAuthRouter(ctx) {
       if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
       const body = await readJson(req);
       const username = validateUsername(body.username);
+      const displayName = validateDisplayName(body.displayName);
       setAuditTarget(username);
       if (findUser.get(username)) throw fail(409, 'username_taken', '這個帳號已經有人使用。');
       const pass = await passwordHash(body.password);
       const userId = crypto.randomUUID();
-      db.prepare('INSERT INTO users(id, username, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?)')
-        .run(userId, username, pass.salt, pass.hash, 'user', new Date().toISOString());
+      db.prepare('INSERT INTO users(id, username, display_name, password_salt, password_hash, role, created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(userId, username, displayName, pass.salt, pass.hash, 'user', new Date().toISOString());
       const grants = Array.isArray(body.permissions) ? body.permissions : [];
       const grant = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
       for (const item of grants) {
