@@ -31,9 +31,9 @@ jobs:
             throw "Invalid release tag: $tag. Use vMAJOR.MINOR.PATCH or a SemVer pre-release suffix."
           }
           $version = $tag.Substring(1)
-          $package = Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json
-          $lock = Get-Content -LiteralPath 'package-lock.json' -Raw | ConvertFrom-Json
-          $rootLockVersion = $lock.packages.PSObject.Properties[''].Value.version
+          $package = Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json -AsHashtable
+          $lock = Get-Content -LiteralPath 'package-lock.json' -Raw | ConvertFrom-Json -AsHashtable
+          $rootLockVersion = $lock.packages[''].version
           if ($package.version -ne $version -or $lock.version -ne $version -or $rootLockVersion -ne $version) {
             throw "Tag $tag must match package.json and package-lock.json versions (expected $version)."
           }
@@ -152,4 +152,3 @@ jobs:
           }
           & gh @ghArgs
           if ($LASTEXITCODE -ne 0) { throw "GitHub Release creation failed for $tag." }
-

@@ -2,7 +2,7 @@
 
 Windows 優先的本機檔案空間原型，以 Electron 提供受限檔案管理、本機帳號權限、媒體播放、ZIP 與加密空間功能。
 
-> **目前狀態**：套件版本為 0.3.0，主線仍在持續開發。v0.3 本機原型功能已建立；SMB／區域網路分享尚未實作。這是實驗性原型，不是可直接取代正式 NAS 的產品，也不是經獨立安全審查的保險箱。
+> **目前狀態**：套件版本為 0.3.0-rc.1（預發行版），主線仍在持續開發。v0.3 本機原型功能已建立；SMB／區域網路分享尚未實作。這是實驗性原型，不是可直接取代正式 NAS 的產品，也不是經獨立安全審查的保險箱。
 
 ## Project Nanako 是什麼？
 
@@ -90,5 +90,3 @@ npm run package:win:installer    # Windows x64 NSIS 使用者安裝版，輸出�
 
 ---
 Project Nanako 以 [MPL-2.0](LICENSE) 授權。原始碼：[GitHub](https://github.com/popuchoco/Project-Nanako)。
-
-
