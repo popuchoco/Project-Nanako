@@ -5,6 +5,9 @@ import {
 } from './playback-progress.mjs';
 
 const $ = (selector) => document.querySelector(selector);
+if (navigator.userAgent.includes('Electron/') && navigator.userAgent.includes('Windows NT')) {
+  document.documentElement.classList.add('electron-windows-titlebar');
+}
 const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', albumScopeAll: true, playerScopeAll: true,
   albumSearch: '', playerSearch: '', albumLoadSequence: 0, playerLoadSequence: 0, albumSearchTimer: null, playerSearchTimer: null, view: null,

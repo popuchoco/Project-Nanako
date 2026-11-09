@@ -287,3 +287,16 @@
 .vault-empty-note{padding:18px 12px;color:#718394;font-size:12px;text-align:center}
 .vault-prototype-notice{margin:10px 0;border-left:3px solid #d9a13c}
 @media(max-width:620px){.vault-browser-card,.vault-recovery-card{padding:12px}.vault-source-controls>*{max-width:100%}.vault-row-actions{min-width:96px}.vault-recovery-item{align-items:stretch;flex-direction:column}}
+/* Keep the desktop shortcut rail vertically scrollable without creating a horizontal scrollbar. */
+.desktop-shortcuts{overflow-x:hidden;overflow-y:auto}
+.desktop-icon{width:100%;max-width:82px;min-width:0}
+@media(max-width:900px){.desktop-icon{width:100%;max-width:72px;min-width:0}}
+@media(max-width:620px){.desktop-shortcuts{overflow-x:auto;overflow-y:hidden}.desktop-icon{width:60px;min-width:60px}}
+.auth-titlebar{display:none}
+.electron-windows-titlebar .system-bar{background:#114167;-webkit-app-region:drag;user-select:none}
+.electron-windows-titlebar .system-bar :is(button,a,input,select,textarea,[role="button"]){-webkit-app-region:no-drag}
+.electron-windows-titlebar .system-bar-end{padding-right:138px}
+.electron-windows-titlebar .auth-screen{position:relative}
+.electron-windows-titlebar .auth-titlebar{position:absolute;top:0;left:0;right:0;height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#114167;color:#f4f8fb;font-size:12px;font-weight:650;-webkit-app-region:drag;user-select:none}
+.electron-windows-titlebar .auth-titlebar .nanako-mark{width:22px;height:22px;border-radius:6px;background:#f3b844;color:#193b5a;display:grid;place-items:center;font-size:13px;font-weight:800}
+.electron-windows-titlebar .auth-titlebar+.auth-panel{position:relative;z-index:1}

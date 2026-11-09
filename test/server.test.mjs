@@ -1195,6 +1195,8 @@ test('system information is restricted to the local administrator', async (t) =>
   const adminInfo = await request('/api/system', { headers: { Cookie: adminCookie } });
   assert.equal(adminInfo.response.status, 200);
   assert.ok(adminInfo.body.computerName);
+  assert.doesNotMatch(adminInfo.body.operatingSystem, /\uFFFD/u);
+  assert.doesNotMatch(adminInfo.body.architecture, /\uFFFD/u);
   assert.ok(adminInfo.body.memory.totalBytes > 0);
   assert.equal(typeof adminInfo.body.windowsExecution.supported, 'boolean');
   assert.equal(typeof adminInfo.body.windowsExecution.isAdministrator, 'boolean');

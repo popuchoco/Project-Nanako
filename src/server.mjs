@@ -214,9 +214,12 @@ async function collectSystemInformation(dataDir) {
     try {
       const { stdout } = await execFileAsync('powershell.exe', [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-        "Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture | ConvertTo-Json -Compress",
-      ], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
-      const info = JSON.parse(stdout.trim());
+        "$info = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture; [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes(($info | ConvertTo-Json -Compress)))",
+      ], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024, encoding: 'utf8' });
+      const info = JSON.parse(Buffer.from(stdout.trim(), 'base64').toString('utf16le'));
+      if ([info.Caption, info.OSArchitecture].some((value) => typeof value !== 'string' || value.includes('\uFFFD'))) {
+        throw new Error('PowerShell returned invalid Windows system text.');
+      }
       windowsVersion = { name: info.Caption, version: info.Version, buildNumber: String(info.BuildNumber), architecture: info.OSArchitecture };
     } catch { /* keep Node.js platform details as a fallback */ }
   }

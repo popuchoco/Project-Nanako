@@ -17,6 +17,20 @@ test('window-all-closed keeps the process alive while the tray is active', async
   assert.doesNotMatch(handler[1], /app\.quit\(\);\s*\n\s*\}/, 'quit should remain gated by the tray and platform conditions');
 });
 
+test('Windows desktop chrome is integrated with the app bar and hides the native app menu', async () => {
+  const main = await readFile(path.join(root, 'electron', 'main.mjs'), 'utf8');
+  const app = await readFile(path.join(root, 'public', 'app.js'), 'utf8');
+  const styles = await readFile(path.join(root, 'public', 'styles.css'), 'utf8');
+
+  assert.match(main, /titleBarStyle:\s*'hidden'/);
+  assert.match(main, /titleBarOverlay:\s*\{\s*color:\s*'#114167'/);
+  assert.match(main, /Menu\.setApplicationMenu\(null\)/);
+  assert.match(app, /electron-windows-titlebar/);
+  assert.match(styles, /\.electron-windows-titlebar \.system-bar\s*\{[^}]*-webkit-app-region:\s*drag/s);
+  assert.match(styles, /\.electron-windows-titlebar \.system-bar :is\([^{}]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag/s);
+  assert.match(styles, /\.desktop-shortcuts\{overflow-x:hidden;overflow-y:auto\}/);
+});
+
 test('desktop shell contains independent Nanako application-window regions and switchers', async () => {
   const html = await readFile(path.join(root, 'public', 'index.html'), 'utf8');
   const app = await readFile(path.join(root, 'public', 'app.js'), 'utf8');

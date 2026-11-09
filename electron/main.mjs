@@ -99,6 +99,11 @@ async function createWindowInstance() {
     minHeight: 600,
     title: 'Nanako｜本機檔案空間',
     backgroundColor: '#f4f6f7',
+    ...(process.platform === 'win32' ? {
+      autoHideMenuBar: true,
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { color: '#114167', symbolColor: '#f4f8fb', height: 36 },
+    } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -178,6 +183,7 @@ async function runDataPathSmokeTest() {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === 'win32') Menu.setApplicationMenu(null);
   if (compatibilityTest) return runMediaCompatibilityTest();
   if (traySmokeTest) return runTraySmokeTest();
   if (dataPathSmokeTest) return runDataPathSmokeTest();

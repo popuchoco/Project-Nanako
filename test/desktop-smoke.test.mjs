@@ -215,6 +215,24 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     (value) => value?.visible && value?.writable,
     'the initial writable file view',
   );
+  const shellLayout = await running.devtools.evaluate(`(() => {
+    const bar = document.querySelector('.system-bar');
+    const launcher = document.querySelector('#launcher-toggle');
+    const shortcuts = document.querySelector('.desktop-shortcuts');
+    return {
+      integratedTitlebar: document.documentElement.classList.contains('electron-windows-titlebar'),
+      barRegion: getComputedStyle(bar).webkitAppRegion,
+      launcherRegion: getComputedStyle(launcher).webkitAppRegion,
+      shortcutsOverflowX: getComputedStyle(shortcuts).overflowX,
+      shortcutsScrollWidth: shortcuts.scrollWidth,
+      shortcutsClientWidth: shortcuts.clientWidth,
+    };
+  })()`);
+  assert.equal(shellLayout.integratedTitlebar, true);
+  assert.equal(shellLayout.barRegion, 'drag');
+  assert.equal(shellLayout.launcherRegion, 'no-drag');
+  assert.equal(shellLayout.shortcutsOverflowX, 'hidden');
+  assert.ok(shellLayout.shortcutsScrollWidth <= shellLayout.shortcutsClientWidth, 'desktop shortcuts should not overflow horizontally');
   await running.devtools.evaluate(`(() => {
     window.prompt = () => ${JSON.stringify(folderName)};
     document.querySelector('#new-folder').click();
