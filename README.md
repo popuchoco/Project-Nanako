@@ -67,6 +67,14 @@ npm run package:win:installer    # Windows x64 NSIS 使用者安裝版，輸出�
 
 媒體測試報告反映 Electron 內建 Chromium 的能力及測試片段結果，不代表所有來源檔格式都能播放。封裝後亦可執行 `Nanako-0.3.0-x64-portable.exe --media-compatibility-test` 產生媒體相容性報告。
 
+## GitHub Actions 自动发布
+
+版本标签会触发 [Windows release workflow](.github/workflows/release.yml)。推送标签前，先让 package.json 与 package-lock.json 的版本号同步为该版本并提交；workflow 会检查标签与两处版本一致，再运行测试、建置及封装后 smoke tests。
+
+- 普通版本标签（例如 v0.3.0）会建立正式 Release。
+- 带 SemVer 预发布后缀的标签（例如 v0.4.0-rc.1 或 v0.4.0-preview.1）会建立 GitHub Pre-release。
+- Release 会附上 Windows x64 可携式版、NSIS 安装版与 SHA256SUMS.txt。任何验证失败时都不会发布。
+
 ## 文件
 
 - [版本規劃與各里程碑狀態](docs/roadmap.md)
@@ -82,4 +90,5 @@ npm run package:win:installer    # Windows x64 NSIS 使用者安裝版，輸出�
 
 ---
 Project Nanako 以 [MPL-2.0](LICENSE) 授權。原始碼：[GitHub](https://github.com/popuchoco/Project-Nanako)。
+
 
