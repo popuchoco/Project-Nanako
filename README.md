@@ -1,86 +1,85 @@
 # Project Nanako
 
-**Project Nanako 是一個奠基於 Windows 的類 sandbox 仿 NAS 專案**，以一般 Windows 電腦提供近似 NAS 的純軟體檔案管理與分享體驗，不需專用硬體；本專案是以 **Electron 為基礎的延伸作品**。
+Windows 優先的本機檔案空間原型，以 Electron 提供受限檔案管理、本機帳號權限、媒體播放、ZIP 與加密空間功能。
 
-**專案描述：**在 Nanako 視窗內模擬桌面操作體驗，並提供隨選隨用、資料範圍受限的本機檔案空間。各 Nanako 應用程式可在自己的內部視窗中開啟，並透過工作列／Dock 切換、拖曳／方向鍵移動、最小化、最大化／還原及關閉；這些介面不會取代或控制 Windows 桌面與系統功能。本專案程式碼採用 **Mozilla Public License 2.0（MPL-2.0）**，完整條文見 [LICENSE](LICENSE)。
+> **目前狀態**：套件版本為 0.3.0，主線仍在持續開發。v0.3 本機原型功能已建立；SMB／區域網路分享尚未實作。這是實驗性原型，不是可直接取代正式 NAS 的產品，也不是經獨立安全審查的保險箱。
 
-目前原型將管理的檔案與帳號中繼資料存放於應用程式資料目錄，服務僅綁定本機迴圈介面。此處的「sandbox」是專案定位，不代表作業系統層級的安全沙箱，也不表示目前已能取代正式 NAS 或提供區域網路服務。
+## Project Nanako 是什麼？
 
-目前版本為 **v0.3.0** 本機原型：可在本機建立管理員與使用者、設定 Nanako 資料空間讀寫權限、瀏覽與管理檔案、使用資源回收桶、瀏覽圖片及播放瀏覽器支援的音訊／影片。可攜式版將資料放在執行檔旁的 `NanakoData`；Windows 安裝版將資料放在目前使用者的應用程式資料目錄。兩種模式的檔案管理都嚴格限制於各自的 `NanakoData`，不會瀏覽其他磁碟或 Windows 個人資料夾。
+Project Nanako 在一般 Windows 電腦上提供一個本機優先、類 NAS 的檔案空間，不需要專用 NAS 硬體。Electron 桌面程式內含本機 HTTP 服務，並以 Nanako 自己的桌面、工作列與多視窗介面管理檔案、相片及影音。
 
-## 目前範圍
+「sandbox」描述的是應用程式的資料範圍：一般檔案操作固定在 Nanako 的 `NanakoData`，不會瀏覽或管理其他磁碟、Windows 個人資料夾或任意路徑。它**不是 Windows 作業系統層級的安全沙箱**；具備 Windows 檔案系統存取權的人仍可能直接存取未放入加密空間的一般檔案。
 
-- Electron 桌面視窗搭配內嵌本機 HTTP 服務；Electron 視窗啟動時使用隨機連接埠。Windows 桌面版提供系統匣：關閉主視窗會隱藏並保留本機服務，點擊圖示可重新開啟，從系統匣選單退出才會停止服務。除可攜式 `.exe` 外，新增不要求系統管理員權限的 NSIS 使用者安裝程式；兩種發行方式均有 Windows 封裝 smoke test。管理員首次設定、登入、建立使用者／資料夾及關閉重開後資料保留，已加入 Electron 桌面煙霧測試；完整正式使用流程與實際來源影音檔仍待驗證。
-- Nanako 視窗內提供仿桌面的操作介面：桌面捷徑、應用程式選單、工作列、時鐘，以及可拖曳、最小化、最大化與關閉的 Nanako 內部應用程式視窗；不呼叫 Windows Shell 或修改作業系統桌面。
-- 命令列模式預設使用 `127.0.0.1:8765`；目前**不開放區域網路連線**。
-- 首次啟動建立本機管理員；帳號、權限與登入工作階段存放在本機 SQLite。
-- 管理員可新增本機使用者，並指定分享資料夾的讀取／寫入權限。
-- 管理員可修改一般使用者的資料空間權限、停用或重新啟用帳號；停用後會撤銷既有登入工作階段。使用者可自行變更密碼，成功後其他工作階段會撤銷。登入錯誤達 5 次／15 分鐘時，該帳號會暫停登入 15 分鐘。
-- 支援資料夾瀏覽、建立資料夾、上傳、下載、重新命名、移動、複製、批次選取／操作、移至資源回收桶、還原及管理員永久刪除；所有操作都限制在同一 Nanako 資料空間內，不接受外部路徑。
-- 檔案管理器具 Nanako 內部側邊導覽、目前資料空間全域的圖片／影片／音訊／文件分類搜尋、目前資料夾檔名搜尋與名稱／修改時間／大小排序；分類結果顯示相對位置，僅能開啟檔案，不會直接批次修改。相簿和播放器也支援整個資料空間的媒體索引，並保留資料夾瀏覽模式。另有依檔案內容比對的重複檔案整理流程，整理前由使用者指定保留檔案，副本移至資源回收桶。
-- 相簿可搜尋目前 Nanako 資料空間中的所有圖片並開啟全螢幕檢視，也可切換到資料夾瀏覽；播放器可搜尋整個資料空間中的音訊／影片播放清單，也可切換到資料夾瀏覽，並透過受權限保護的 HTTP Range 串流播放。播放進度依 Nanako 使用者、資料空間與檔案版本儲存在本機 SQLite，關閉播放器或程式後可續播；不會送到外部服務或寫入操作紀錄。
-- 不含 SSO、雲端帳號、遠端中繼、遙測、更新檢查或硬體控制。
-- SMB 分享與區域網路介面選擇尚未實作；管理員可先檢視 Windows SMB 服務、TCP 445 與程序提升狀態，這項唯讀檢查不會建立分享。SMB 是本專案必要功能，預設關閉的安全分享服務列入 v0.4。正式外部整合 API 尚未實作，列入後續規劃。
-- 加密空間提供本機原型：NanakoData 檔案串流加密、一次性復原金鑰、加密資源回收筒、進度／取消、孤兒密文核對，以及只存放於 NanakoData 的加密備份／還原。上鎖物件在磁碟上是密文，名稱與索引也以加密方式保存；未移入加密空間的一般檔案仍可由具有該目錄 Windows 存取權的使用者直接開啟。這不是正式保險箱，尚未完成獨立安全審查、完整磁碟故障注入及異地備份流程；備份資料夾仍在同一個 NanakoData，無法防止裝置或整個資料目錄遺失。
-- 檔案管理提供 NanakoData 內 ZIP 串流建立與解壓縮原型；具備路徑／CRC／大小限制、進度／取消及失敗暫存清理，通過 ZIP Slip、32 MiB 串流記憶體與 Windows PowerShell ZIP 互通測試。更大型封存、不同 Windows 裝置效能及更多損毀格式測試仍待加強。
-- 「我的電腦」只列出使用者有權存取的 Nanako 資料空間，不會列出 Windows 磁碟、已知資料夾或任意路徑。匯入檔案會將使用者選取的檔案複製到 Nanako 資料目錄；其他檔案操作只會存取 Nanako 目錄。
-- 「電腦資訊」可查看作業系統、處理器、記憶體、Nanako 資料目錄所在磁碟容量及網路介面資訊，僅供本機管理員查看。
-- 「電腦資訊」也會顯示目前 Windows 身分是否屬於系統管理員群組，以及 Nanako 程序目前是否已提升至高完整性權限；Windows 帳號是管理員，不代表目前程式已提升。NSIS 安裝版採單一使用者安裝、不要求提升；需要管理員權限的服務安裝與一般 Windows 使用者權限分離仍未實作。
-- 系統設定提供管理員檢視所有使用者操作紀錄、自動清除期限（1／3／7／30／90／180／365 日，預設 30 日），以及輸入指定文字後手動清除全部紀錄的防呆流程。
-- 主要使用者操作會記錄於本機 SQLite；紀錄不包含密碼、工作階段權杖或檔案內容，但會包含必要的檔名或相對路徑。此紀錄不防篡改；有權直接存取 NanakoData 的本機人員仍能修改資料庫。
-- 播放器提供 Electron 內建 Chromium 的格式能力提示，以及由本機測試片段實際錄製並播放的相容性測試。能力提示不等同所有來源檔均可播放；未能由內建錄製器產生的格式仍需用實際檔案驗證。
+## 目前已實作
 
-本原型不適合直接公開部署或存放重要資料。開放區域網路前，需完成網卡／連接埠設定、TLS 憑證、授權與檔案系統安全測試；發布前也需完成可攜式封裝與第三方授權盤點。
+- **Nanako 桌面**：桌面捷徑、啟動器、工作列／Dock、時鐘與內部應用程式視窗。視窗可拖曳、移動、最小化、最大化／還原及關閉；Windows 桌面與 Shell 不會被接管。Windows 桌面版提供系統匣，關閉主視窗會隱藏程式，從系統匣退出才停止服務。
+- **本機帳號與權限**：首次設定管理員、建立使用者、指定資料空間讀寫權限、停用／啟用帳號、變更密碼與登入節流。帳號與工作階段存在本機 SQLite；密碼使用 scrypt 雜湊。
+- **檔案管理**：資料夾瀏覽與建立、上傳／下載、重新命名、移動、複製、批次操作、資源回收桶與還原。操作限於 Nanako 資料空間，並檢查讀寫權限。
+- **搜尋與整理**：依圖片、影片、音訊、文件分類搜尋 Nanako 資料空間；支援檔名篩選、排序及重複檔案掃描／可復原整理。掃描有數量上限，不會搜尋 Windows 其他磁碟。
+- **相簿與播放器**：可在資料夾瀏覽或資料空間媒體索引間切換；播放器使用受權限保護的 HTTP Range 串流，播放進度保存在本機並可續播。格式相容性仍取決於 Electron／Chromium 與實際媒體檔。
+- **ZIP 與加密空間原型**：NanakoData 內的串流壓縮／解壓縮與 ZIP 路徑、CRC 等檢查；加密空間支援加密檔案、復原金鑰、加密資源回收筒，以及同一 NanakoData 內的加密備份／還原。
+- **管理與記錄**：管理員可查看電腦資訊、Windows SMB 前置狀態（唯讀）及本機操作紀錄，並設定紀錄保留期限。
+- **Windows 發行方式**：提供 x64 可攜式執行檔與 NSIS 單一使用者安裝程式。安裝不要求系統管理員提升，也不會安裝 Windows 服務或修改系統分享設定。
 
-原始碼及 MPL-2.0 授權條文可由 [Project Nanako GitHub 專案](https://github.com/popuchoco/Project-Nanako) 取得。
+## 範圍與限制
 
-## 開發環境
+- 本機服務僅綁定迴圈介面；命令列預設為 `127.0.0.1:8765`。不提供 LAN 存取、SMB 分享或路由器連接埠轉送。
+- 管理介面中的 SMB 檢查只讀取 Windows 服務、TCP 445 與權限狀態；不會建立分享。SMB 是後續 v0.4 規劃中的必要功能，目前尚未整合伺服器、啟用監聽或完成跨裝置／安全測試。
+- 加密空間仍是本機原型，尚未完成獨立安全審查、完整磁碟故障注入與異地備份流程。備份目前仍在同一個 `NanakoData`，不能防止裝置或整個資料目錄遺失，也不承諾 SSD 安全抹除。
+- 原始碼目前不包含雲端登入、遙測或遠端更新功能；完整發行封裝的外部網路流量尚未完成封包層驗證。
+- 不建議用於公開部署或存放唯一的重要資料。發行前仍需持續完成安全、相容性、升級與復原驗證。
 
-- Node.js 22.13 以上（使用內建 `node:sqlite`）
-- npm
-- Electron 45.2.2（桌面版開發相依套件）
+## 快速開始
+
+需求：Windows、Node.js 22.13 以上與 npm。
 
 ```powershell
-npm test
-npm run test:desktop-smoke # Windows Electron 首次設定、使用者管理與重開資料保留測試
-npm run test:media # Electron 執行期格式宣告與可產生測試片段的實際播放檢查
-npm run package:win # Windows x64 可攜式封裝，輸出至 dist/
-npm run package:win:installer # Windows x64 NSIS 使用者安裝程式，輸出至 dist/
-npm start       # 本機網頁原型：127.0.0.1:8765
-npm run desktop # Electron 桌面視窗
+npm install
+
+# 本機網頁原型（127.0.0.1:8765）
+npm start
+
+# 或啟動 Electron 桌面程式
+npm run desktop
 ```
 
-可攜式桌面版將設定檔、工作階段與資料放在可攜式執行檔旁的 `NanakoData\`；請將程式放在目前 Windows 使用者可寫入的位置。NSIS 安裝版為單一 Windows 使用者安裝，設定檔、工作階段與 `NanakoData\` 放在該使用者的應用程式資料目錄；安裝目錄選擇不會改變資料位置。兩種模式不會自動互相搬移資料，解除安裝也不會主動刪除使用者資料。Electron 開發啟動時資料位於專案目錄的 `NanakoData\`；命令列模式使用相同專案目錄。不能透過介面指定任意外部資料夾。可用 `LOCALNAS_PORT` 更改命令列模式的連接埠；此版本會拒絕非迴圈介面位址，不要用它提供區域網路服務。詳見[安裝與資料位置](docs/installation.md)。
+程式首次啟動時建立本機管理員帳號。命令列模式可用 `LOCALNAS_PORT` 更改連接埠，但仍只接受迴圈介面位址。
 
-測試已封裝桌面程式的媒體相容性：`dist\Nanako-0.3.0-x64-portable.exe --media-compatibility-test`。測試報告會列出 Electron／Chromium 版本、格式能力宣告及可產生測試片段的實際解碼結果。這不會以 FFmpeg 轉碼；媒體格式支援以實際發行檔及來源檔測試結果為準。
+### 資料位置
 
-## 隱私與資料處理
+| 模式 | NanakoData 位置 |
+| --- | --- |
+| 可攜式 Windows 執行檔 | 執行檔旁的 `NanakoData/` |
+| NSIS 使用者安裝版 | 該 Windows 使用者的 Electron `userData/NanakoData/` |
+| 開發／命令列模式 | 專案目錄中的 `NanakoData/` |
 
-- 應用程式原始碼不含外部 API、雲端登入、遙測或遠端更新呼叫。
-- 原型只綁定本機迴圈介面；不建立防火牆規則，也不設定路由器連接埠轉送。
-- 密碼使用 scrypt 雜湊；工作階段權杖以雜湊值存於 SQLite。
-- 操作紀錄只儲存在 NanakoData 的 SQLite；保留期限可調，預設 30 日。管理員手動清空後不可復原；清空動作本身不會留在已清除的紀錄內。
-- 檔案、相簿、播放器與資源回收桶的實體路徑都由伺服器固定映射至 `NanakoData\data\files` 或 `NanakoData\data\trash`；API 只接受資料空間內的相對路徑，拒絕路徑跳脫與符號連結。匯入是明確複製操作，應用程式不提供外部資料夾瀏覽或管理功能。
-- 「不傳送資料到外部」仍須於正式封裝後，透過 Windows 防火牆或封包擷取驗證完整發行檔；目前尚未完成該驗證。
+以上模式使用不同資料目錄，不會自動互相搬移。解除安裝不會主動刪除使用者資料。從可攜式版轉移至安裝版前，請先完整退出程式並備份；詳細步驟見[安裝與資料位置](docs/installation.md)。
+
+## 測試與封裝
+
+```powershell
+npm test                         # 單元與整合測試
+npm run test:desktop-smoke       # Windows Electron 首次設定、操作與重啟資料保留
+npm run test:media               # Electron 執行期媒體能力與可產生測試片段檢查
+npm run package:win              # Windows x64 可攜式版，輸出至 dist/
+npm run package:win:installer    # Windows x64 NSIS 使用者安裝版，輸出至 dist/
+```
+
+媒體測試報告反映 Electron 內建 Chromium 的能力及測試片段結果，不代表所有來源檔格式都能播放。封裝後亦可執行 `Nanako-0.3.0-x64-portable.exe --media-compatibility-test` 產生媒體相容性報告。
 
 ## 文件
 
+- [版本規劃與各里程碑狀態](docs/roadmap.md)
+- [安裝與資料位置](docs/installation.md)
 - [系統架構](docs/architecture.md)
-- [設計說明](docs/design.md)
 - [目前本機 API](docs/api.md)
 - [Electron 媒體相容性初測](docs/media-compatibility-report.md)
-- [版本規劃](docs/roadmap.md)
-- [決策紀錄](docs/decisions/)
-- [第三方專案與授權](THIRD_PARTY.md)
+- [SMB 區域網路分享規劃](docs/smb-implementation-plan.md)
+- [加密空間與 ZIP 原型／驗證](docs/feature-plan-encryption-and-archives.md)
 - [版本紀錄](CHANGELOG.md)
-- [台灣用語指南](docs/terminology.md)
+- [第三方專案與授權](THIRD_PARTY.md)
 - [Mozilla Public License 2.0](LICENSE)
-- [介面與產品設計參考（不含採用原始碼）](docs/design-references.md)
-- [OS 介面操作、記憶體與封裝容量檢視](docs/performance-and-os-ux-review.md)
-- [SMB 區域網路分享實作規劃](docs/smb-implementation-plan.md)
-- [ADR-0015：Windows SMB 區域網路分享](docs/decisions/ADR-0015-smb-sharing.md)
-- [加密空間規劃與 ZIP 原型／安全驗證](docs/feature-plan-encryption-and-archives.md)
-- [ADR-0011：操作紀錄與保留期限](docs/decisions/ADR-0011-operation-audit-and-retention.md)
-- [ADR-0012：使用者管理與登入節流](docs/decisions/ADR-0012-user-administration-and-login-throttling.md)
-- [ADR-0013：Windows 系統管理員安裝與執行權限](docs/decisions/ADR-0013-windows-administrator-installation-and-runtime.md)
+
+---
+Project Nanako 以 [MPL-2.0](LICENSE) 授權。原始碼：[GitHub](https://github.com/popuchoco/Project-Nanako)。
 
