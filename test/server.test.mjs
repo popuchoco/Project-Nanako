@@ -1643,15 +1643,29 @@ test('administrators can update share grants and deactivate accounts', async (t)
   const userCookie = login.response.headers.get('set-cookie').split(';')[0];
   assert.equal((await request('/api/shares', { headers: { Cookie: userCookie } })).body.shares.length, 1);
 
+  const renamed = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ displayName: '家庭成員' }) });
+  assert.equal(renamed.response.status, 200);
+  assert.equal(renamed.body.user.displayName, '家庭成員');
+  assert.equal(renamed.body.user.username, 'managed-user');
+  assert.equal(renamed.body.user.permissions[0].canWrite, true, 'editing a display name should preserve access grants');
+  const resetPassword = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ password: 'managed-user-new-passphrase-2026' }) });
+  assert.equal(resetPassword.response.status, 200);
+  assert.equal((await request('/api/me', { headers: { Cookie: userCookie } })).response.status, 401, 'password reset should revoke the user session');
+  const oldPasswordLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
+  assert.equal(oldPasswordLogin.response.status, 401);
+  const newPasswordLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-new-passphrase-2026' }) });
+  assert.equal(newPasswordLogin.response.status, 200);
+  const updatedUserCookie = newPasswordLogin.response.headers.get('set-cookie').split(';')[0];
+
   const revoked = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: true, permissions: [] }) });
   assert.equal(revoked.response.status, 200);
-  const denied = await request('/api/shares', { headers: { Cookie: userCookie } });
+  const denied = await request('/api/shares', { headers: { Cookie: updatedUserCookie } });
   assert.equal(denied.response.status, 200);
   assert.deepEqual(denied.body.shares, []);
 
   const deactivated = await request(`/api/users/${userId}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: false, permissions: [{ shareId, canRead: true, canWrite: false }] }) });
   assert.equal(deactivated.response.status, 200);
-  assert.equal((await request('/api/me', { headers: { Cookie: userCookie } })).response.status, 401);
+  assert.equal((await request('/api/me', { headers: { Cookie: updatedUserCookie } })).response.status, 401);
   const blockedLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
   assert.equal(blockedLogin.response.status, 401);
 
@@ -1660,13 +1674,13 @@ test('administrators can update share grants and deactivate accounts', async (t)
   assert.equal(reactivated.body.user.isActive, 1);
   assert.equal(reactivated.body.user.permissions[0].canRead, true);
   assert.equal(reactivated.body.user.permissions[0].canWrite, false);
-  const refreshedLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-passphrase-2026' }) });
+  const refreshedLogin = await request('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'managed-user', password: 'managed-user-new-passphrase-2026' }) });
   assert.equal(refreshedLogin.response.status, 200);
 
   const selfEdit = await request(`/api/users/${adminUser.id}`, { method: 'PATCH', headers: adminAuth, body: JSON.stringify({ isActive: false, permissions: [] }) });
   assert.equal(selfEdit.response.status, 400);
   const history = await request('/api/audit-logs', { headers: { Cookie: adminCookie } });
-  assert.ok(history.body.logs.filter((item) => item.action === '更新使用者權限').length >= 3);
+  assert.ok(history.body.logs.filter((item) => item.action === '更新使用者設定').length >= 5);
 });
 
 test('users can change their own password and other sessions are revoked', async (t) => {

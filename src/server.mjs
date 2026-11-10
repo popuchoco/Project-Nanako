@@ -313,7 +313,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'POST' && route === '/api/trash/restore') return { action: '還原資源回收桶項目', target: '資源回收桶項目' };
     if (method === 'DELETE' && route === '/api/trash') return { action: '永久刪除資源回收桶項目', target: '資源回收桶項目' };
     if (method === 'POST' && route === '/api/users') return { action: '建立使用者', target: '使用者帳號' };
-    if (method === 'PATCH' && /^\/api\/users\/[0-9a-f-]{36}$/iu.test(route)) return { action: '更新使用者權限', target: '使用者帳號' };
+    if (method === 'PATCH' && /^\/api\/users\/[0-9a-f-]{36}$/iu.test(route)) return { action: '更新使用者設定', target: '使用者帳號' };
     if (method === 'POST' && route === '/api/password') return { action: '變更密碼', target: '本機帳號' };
     if (method === 'GET' && route === '/api/users') return { action: '檢視使用者清單', target: '使用者與權限' };
     if (method === 'POST' && route === '/api/archive/create') return { action: '建立 ZIP 壓縮檔', target: target(url.searchParams.get('path')) };

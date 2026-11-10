@@ -227,27 +227,45 @@ export function createAuthRouter(ctx) {
       if (user.role !== 'admin') throw fail(403, 'admin_required', '只有管理員可以管理使用者。');
       const targetId = route.slice('/api/users/'.length);
       if (!/^[0-9a-f-]{36}$/iu.test(targetId)) throw fail(404, 'user_not_found', '找不到這個使用者。');
-      if (targetId === user.id) throw fail(400, 'cannot_edit_self', '不能透過此畫面停用或修改自己的帳號權限。');
       const targetUser = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(targetId);
-      if (!targetUser || targetUser.role !== 'user') throw fail(404, 'user_not_found', '找不到可管理的使用者。');
+      if (!targetUser) throw fail(404, 'user_not_found', '找不到可管理的使用者。');
       setAuditTarget(targetUser.username);
       const body = await readJson(req);
-      if (typeof body.isActive !== 'boolean' || !Array.isArray(body.permissions)) throw fail(400, 'invalid_user_update', '請提供帳號啟用狀態與資料空間權限。');
+      const updatesAccess = Object.hasOwn(body, 'isActive') || Object.hasOwn(body, 'permissions');
+      const updatesDisplayName = Object.hasOwn(body, 'displayName');
+      const updatesPassword = Object.hasOwn(body, 'password');
+      if ((!updatesAccess && !updatesDisplayName && !updatesPassword)
+        || (updatesAccess && (typeof body.isActive !== 'boolean' || !Array.isArray(body.permissions)))) {
+        throw fail(400, 'invalid_user_update', '請提供顯示名稱、新密碼，或帳號啟用狀態與資料空間權限。');
+      }
+      if (targetId === user.id) throw fail(400, 'cannot_edit_self', '請使用「我的帳號」功能修改自己的名稱或密碼。');
+      if (targetUser.role !== 'user' && updatesAccess) throw fail(400, 'cannot_edit_admin_permissions', '管理員帳號不能套用一般使用者的資料空間權限。');
+      const displayName = updatesDisplayName ? validateDisplayName(body.displayName) : null;
+      const nextPassword = updatesPassword ? await passwordHash(body.password) : null;
       const grants = new Map();
-      for (const item of body.permissions) {
-        if (!item || typeof item.shareId !== 'string' || !findShare.get(item.shareId)) throw fail(400, 'invalid_permission', '資料空間權限設定不正確。');
-        const canRead = Boolean(item.canRead);
-        grants.set(item.shareId, { canRead, canWrite: canRead && Boolean(item.canWrite) });
+      if (updatesAccess) {
+        for (const item of body.permissions) {
+          if (!item || typeof item.shareId !== 'string' || !findShare.get(item.shareId)) throw fail(400, 'invalid_permission', '資料空間權限設定不正確。');
+          const canRead = Boolean(item.canRead);
+          grants.set(item.shareId, { canRead, canWrite: canRead && Boolean(item.canWrite) });
+        }
       }
       db.exec('BEGIN IMMEDIATE');
       try {
-        db.prepare('DELETE FROM share_permissions WHERE user_id = ?').run(targetId);
-        const grantPermission = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
-        for (const [shareId, grant] of grants) grantPermission.run(targetId, shareId, Number(grant.canRead), Number(grant.canWrite));
-        db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(Number(body.isActive), targetId);
-        if (!body.isActive) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+        if (updatesAccess) {
+          db.prepare('DELETE FROM share_permissions WHERE user_id = ?').run(targetId);
+          const grantPermission = db.prepare('INSERT INTO share_permissions(user_id, share_id, can_read, can_write) VALUES(?,?,?,?)');
+          for (const [shareId, grant] of grants) grantPermission.run(targetId, shareId, Number(grant.canRead), Number(grant.canWrite));
+          db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(Number(body.isActive), targetId);
+          if (!body.isActive) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+        }
+        if (updatesDisplayName) db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, targetId);
+        if (updatesPassword) {
+          db.prepare('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?').run(nextPassword.salt, nextPassword.hash, targetId);
+          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+        }
         db.exec('COMMIT');
-        if (!body.isActive) await lockVaultKey(targetId);
+        if ((updatesAccess && !body.isActive) || updatesPassword) await lockVaultKey(targetId);
       } catch (error) {
         db.exec('ROLLBACK');
         throw error;

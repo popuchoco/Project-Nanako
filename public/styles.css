@@ -253,6 +253,8 @@
 .launcher-quick-glyph.album-art>i{transform:translate(4px,1px) scale(.7)}
 .launcher-quick-glyph.player-art{font-size:10px}
 .launcher-menu:not([hidden]){animation:launcher-appear .14s ease-out both}
+/* Keep the dock button where it is; center only the menu it opens. */
+.launcher-menu{left:50%;translate:-50% 0}
 @keyframes widget-appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @keyframes launcher-appear{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:900px){.desktop-status-widget{right:16px;width:250px;padding:13px 14px 11px}.desktop-widget-time{font-size:29px}}
@@ -338,4 +340,65 @@
 
 .lan-access-card,.network-check-card{max-width:760px;margin-top:16px}.lan-access-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:14px 0 8px}.lan-access-controls .field-inline{display:grid;gap:7px;align-items:start}.lan-access-controls select,.lan-access-controls input{height:39px;min-width:190px;border:1px solid #cbd5d9;border-radius:6px;background:#fff;color:var(--ink);padding:0 10px}.lan-access-controls input{width:120px;min-width:120px}.lan-access-controls .button.danger{background:#a63e36;color:#fff}.lan-access-controls .button.danger:hover{background:#87312b}.lan-endpoint{display:inline-block;margin:2px 0 10px;padding:10px 12px;border:1px solid #cbd6da;border-radius:7px;background:#f8fafb;color:#145f73;font-family:ui-monospace,Consolas,monospace;font-size:14px;user-select:all}.lan-fingerprint{overflow-wrap:anywhere;margin:5px 0 14px;font-size:11px}.lan-access-card .notice{margin:18px 0 0}@media(max-width:680px){.lan-access-controls{align-items:stretch;flex-direction:column}.lan-access-controls select,.lan-access-controls input{width:100%;min-width:0}.lan-access-controls .button{width:100%}}
 .lan-access-controls select[aria-invalid="true"],.lan-access-controls input[aria-invalid="true"]{border-color:var(--danger)}.lan-field-error{font-size:11px;line-height:1.4;margin:0}
+
+/* One icon system for every application in the launcher. */
+.launcher-icon,.launcher-quick-glyph{position:relative;display:grid;place-items:center;flex:none;width:36px;height:36px;margin:0;border-radius:10px;background:var(--launcher-icon-bg,#e7eff5);color:var(--launcher-icon-fg,#376b87);box-shadow:inset 0 0 0 1px rgba(255,255,255,.78),0 3px 7px rgba(35,70,91,.12);filter:none}
+.launcher-icon svg,.launcher-quick-glyph svg{display:block;width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.launcher-icon .icon-fill,.launcher-quick-glyph .icon-fill{fill:currentColor;stroke:none}
+.launcher-quick-glyph{width:25px;height:25px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.8)}
+.launcher-quick-glyph svg{width:15px;height:15px;stroke-width:2}
+.launcher-icon--files{--launcher-icon-bg:#fff0ca;--launcher-icon-fg:#aa761b}
+.launcher-icon--album{--launcher-icon-bg:#f1e8fa;--launcher-icon-fg:#8050a4}
+.launcher-icon--player{--launcher-icon-bg:#e2f0ff;--launcher-icon-fg:#2878bb}
+.launcher-icon--vault{--launcher-icon-bg:#e1f3ed;--launcher-icon-fg:#287d69}
+.launcher-icon--duplicates{--launcher-icon-bg:#e9ebfa;--launcher-icon-fg:#5c66a7}
+.launcher-icon--trash{--launcher-icon-bg:#e9eef2;--launcher-icon-fg:#607583}
+.launcher-icon--computer{--launcher-icon-bg:#e3f0f7;--launcher-icon-fg:#3e7997}
+.launcher-icon--users{--launcher-icon-bg:#eee9f6;--launcher-icon-fg:#715a98}
+.launcher-icon--settings{--launcher-icon-bg:#e8edf1;--launcher-icon-fg:#5c6e7c}
+.launcher-icon--system{--launcher-icon-bg:#e5eef4;--launcher-icon-fg:#4a7088}
+.launcher-icon--network{--launcher-icon-bg:#e2f2ef;--launcher-icon-fg:#31796f}
+.launcher-icon--tasks{--launcher-icon-bg:#e2f2eb;--launcher-icon-fg:#327b63}
+
+/* Leave room for the shortcut focus ring and hover lift inside the scroll rail. */
+.desktop-shortcuts{padding:4px}
+@media(max-width:620px){.desktop-shortcuts{padding:3px 4px}}
+
+/* Native browser prompts looked unlike the Nanako windows; route them through this themed modal. */
+.app-action-content{gap:14px}
+#app-action-message{white-space:pre-line;overflow-wrap:anywhere}
+#app-action-input-label{display:grid;gap:6px}
+#app-action-input-label[hidden]{display:none}
+#app-action-input{min-width:0}
+.task-dialog>form,.task-dialog>section{padding:24px}
+.task-dialog h2{margin:0;color:#243746;font-size:18px}
+.task-dialog p{margin:0;line-height:1.6}
+.task-dialog .dialog-actions{display:flex;justify-content:flex-end;gap:9px;padding-top:4px}
+.task-dialog progress{width:100%;accent-color:var(--accent)}
+@media(max-width:620px){.task-dialog .dialog-actions{flex-direction:column-reverse}.task-dialog .dialog-actions .button{width:100%}}
+
+.user-self-settings{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #edf1f2}
+.user-self-settings h3{margin:0 0 4px}
+.user-self-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px}
+.user-self-actions .button{min-height:32px;padding:0 9px;font-size:11px}
+.user-management-card>h3{margin-bottom:6px}
+.user-badges .user-edit-name-button{min-height:28px;padding:0 8px;font-size:10px}
+.system-bar{position:relative}
+.account-chevron{font-size:14px;line-height:1;opacity:.78}
+.account-menu{position:absolute;z-index:12;top:42px;right:12px;width:min(310px,calc(100vw - 24px));max-height:calc(100vh - 56px);overflow:auto;padding:12px;border:1px solid rgba(255,255,255,.76);border-radius:12px;background:rgba(246,250,253,.98);color:#2e4352;box-shadow:0 16px 38px rgba(0,31,54,.3);backdrop-filter:blur(16px);-webkit-app-region:no-drag}
+.account-menu-identity{display:flex;align-items:center;gap:10px;padding:3px 4px 11px}
+.account-menu-identity>div{display:grid;gap:3px;min-width:0}
+.account-menu-identity strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#273e51}
+.account-menu-identity small{font-size:10px;color:#778a99}
+.account-menu-group{display:grid;gap:3px;padding-top:9px;margin-top:8px;border-top:1px solid #dfe8ee}
+.account-menu-group h2{margin:0 7px 3px;color:#8293a0;font-size:9px;font-weight:650;letter-spacing:.04em}
+.account-menu-item{width:100%;min-height:32px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#40586b;text-align:left;font-size:11px}
+.account-menu-item:hover{background:#e8f1f8;color:#1e4f73}
+.account-menu-item.account-menu-logout{color:#a4443c}
+.account-menu-item.account-menu-logout:hover{background:#fff0ee}
+.user-row{align-items:flex-start}
+.user-badges{flex-wrap:wrap;justify-content:flex-end}
+.user-badges .button{flex:none}
+.user-badges .user-edit-name-button,.user-badges .user-reset-password-button{min-height:28px;padding:0 8px;font-size:10px}
+@media(max-width:620px){.user-self-settings{align-items:stretch;flex-direction:column}.user-self-actions{justify-content:flex-start}}
 .smb-experimental-setting{border:1px solid #dce6e8;border-radius:8px;padding:13px 14px;background:#fbfdfd}.smb-experimental-toggle{display:flex;align-items:flex-start;gap:10px;cursor:pointer}.smb-experimental-toggle input{width:18px;height:18px;flex:none;margin:1px 0 0;accent-color:var(--accent)}.smb-experimental-toggle input:disabled{cursor:not-allowed;opacity:.55}.smb-experimental-toggle span{display:grid;gap:4px}.smb-experimental-toggle strong{font-size:13px;color:#2f464d}.smb-experimental-toggle small,.smb-experimental-disclaimer{font-size:11px;line-height:1.55;color:#73838a}.smb-experimental-setting .inline-message{margin:10px 0 0;font-size:12px}.smb-experimental-disclaimer{margin:10px 2px 12px}.smb-preflight-details{border-top:1px solid #e7edef;padding-top:10px}.smb-preflight-details summary{cursor:pointer;color:#536970;font-size:12px;font-weight:600}.smb-preflight-details[open] .smb-status-grid{margin-top:13px}

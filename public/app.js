@@ -5,6 +5,88 @@ import {
 } from './playback-progress.mjs';
 
 const $ = (selector) => document.querySelector(selector);
+let actionDialogResolver = null;
+let actionDialogMode = 'confirm';
+let actionDialogRequiredValue = null;
+let resetPasswordUserId = null;
+
+function initializeActionDialog() {
+  const dialog = $('#app-action-dialog');
+  const form = $('#app-action-form');
+  const input = $('#app-action-input');
+  const confirmButton = $('#app-action-confirm');
+  const cancelButton = $('#app-action-cancel');
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (actionDialogRequiredValue !== null && input.value !== actionDialogRequiredValue) {
+      input.focus();
+      return;
+    }
+    dialog.close('confirm');
+  });
+  cancelButton.addEventListener('click', () => dialog.close('cancel'));
+  input.addEventListener('input', () => {
+    confirmButton.disabled = actionDialogRequiredValue !== null && input.value !== actionDialogRequiredValue;
+  });
+  dialog.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    dialog.close('cancel');
+  });
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close('cancel');
+  });
+  dialog.addEventListener('close', () => {
+    const resolve = actionDialogResolver;
+    if (!resolve) return;
+    actionDialogResolver = null;
+    const mode = actionDialogMode;
+    const accepted = dialog.returnValue === 'confirm';
+    resolve(accepted ? (mode === 'prompt' ? input.value : true) : (mode === 'prompt' ? null : false));
+  });
+}
+
+function openActionDialog(mode, options = {}) {
+  const dialog = $('#app-action-dialog');
+  if (dialog.open || actionDialogResolver) return Promise.resolve(mode === 'prompt' ? null : false);
+  const input = $('#app-action-input');
+  const inputLabel = $('#app-action-input-label');
+  const confirmButton = $('#app-action-confirm');
+  const hasInput = mode === 'prompt';
+
+  $('#app-action-title').textContent = options.title || (hasInput ? '輸入內容' : '確認操作');
+  const message = $('#app-action-message');
+  message.textContent = options.message || '';
+  message.hidden = !options.message;
+  inputLabel.hidden = !hasInput;
+  $('#app-action-input-label-text').textContent = options.inputLabel || '輸入內容';
+  input.value = options.value ?? '';
+  input.placeholder = options.placeholder || '';
+  actionDialogRequiredValue = options.requiredValue ?? null;
+  actionDialogMode = mode;
+
+  $('#app-action-cancel').textContent = options.cancelText || '取消';
+  confirmButton.textContent = options.confirmText || (hasInput ? '確定' : '確定');
+  confirmButton.classList.remove('primary', 'danger');
+  confirmButton.classList.add(options.danger ? 'danger' : 'primary');
+  confirmButton.disabled = actionDialogRequiredValue !== null && input.value !== actionDialogRequiredValue;
+  dialog.returnValue = '';
+
+  return new Promise((resolve) => {
+    actionDialogResolver = resolve;
+    dialog.showModal();
+    requestAnimationFrame(() => (hasInput ? input : confirmButton).focus());
+  });
+}
+
+function showAppConfirm(message, options = {}) {
+  return openActionDialog('confirm', { message, ...options });
+}
+
+function showAppPrompt(message, options = {}) {
+  return openActionDialog('prompt', { message, ...options });
+}
+
 if (navigator.userAgent.includes('Electron/') && navigator.userAgent.includes('Windows NT')) {
   document.documentElement.classList.add('electron-windows-titlebar');
 }
@@ -180,6 +262,7 @@ function showAuth(needsSetup) {
   clearTimeout(state.systemRefreshTimer);
   $('#app-shell').hidden = true;
   closeLauncherMenu();
+  closeAccountMenu();
   $('#auth-screen').hidden = false;
   $('#auth-title').textContent = needsSetup ? '設定本機管理員' : '登入 Nanako';
   $('#auth-description').textContent = needsSetup ? '建立只有這台電腦使用的管理員帳號。資料不會送到外部服務。' : '請使用本機帳號登入。這個帳號不會連結任何雲端服務。';
@@ -218,6 +301,9 @@ function updateAccountIdentity() {
   const displayName = state.user?.displayName?.trim() || state.user?.username || '';
   $('#account-name').textContent = displayName;
   $('#account-avatar').textContent = Array.from(displayName)[0] || '用';
+  $('#account-menu-name').textContent = displayName;
+  $('#account-menu-username').textContent = `登入帳號：${state.user?.username || ''}`;
+  $('#account-menu-avatar').textContent = Array.from(displayName)[0] || '用';
   $('#desktop-account').title = `${displayName}（登入帳號：${state.user?.username || ''}）`;
 }
 
@@ -368,6 +454,7 @@ function createAppWindow(view) {
 
 function launchView(view) {
   closeLauncherMenu();
+  closeAccountMenu();
   const definition = appDefinitions[view];
   if (!definition) return;
   if (definition.adminOnly && state.user?.role !== 'admin') { notify('這項功能僅供管理員使用。', true); return; }
@@ -451,11 +538,23 @@ function toggleLauncherMenu(force) {
   const menu = $('#launcher-menu');
   const button = $('#launcher-toggle');
   const open = force ?? menu.hidden;
+  if (open) closeAccountMenu();
   menu.hidden = !open;
   button.setAttribute('aria-expanded', String(open));
 }
 
 function closeLauncherMenu() { toggleLauncherMenu(false); }
+
+function toggleAccountMenu(force) {
+  const menu = $('#account-menu');
+  const button = $('#desktop-account');
+  const open = force ?? menu.hidden;
+  if (open) closeLauncherMenu();
+  menu.hidden = !open;
+  button.setAttribute('aria-expanded', String(open));
+}
+
+function closeAccountMenu() { toggleAccountMenu(false); }
 
 function toggleWindowMaximized(entry) {
   const { element } = entry;
@@ -618,6 +717,7 @@ function initializeWindowInteractions(entry) {
 }
 
 function initializeDesktopInteractions() {
+  initializeActionDialog();
   document.querySelectorAll('[data-open-view]').forEach((button) => button.addEventListener('click', () => launchView(button.dataset.openView)));
   document.querySelectorAll('[data-file-category]').forEach((button) => button.addEventListener('click', () => setFileCategory(button.dataset.fileCategory)));
   $('[data-file-location="root"]').addEventListener('click', () => {
@@ -626,12 +726,19 @@ function initializeDesktopInteractions() {
   });
   $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
   $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
-  $('#desktop-account').addEventListener('click', () => toggleLauncherMenu());
+  $('#desktop-account').addEventListener('click', () => toggleAccountMenu());
   $('#desktop-area').addEventListener('pointerdown', (event) => {
     if (event.target === event.currentTarget) closeLauncherMenu();
   });
+  document.addEventListener('pointerdown', (event) => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    const launcherButtons = [$('#launcher-toggle'), $('#dock-launcher')];
+    if (!$('#launcher-menu').contains(target) && !launcherButtons.some((button) => button.contains(target))) closeLauncherMenu();
+    if (!$('#account-menu').contains(target) && !$('#desktop-account').contains(target)) closeAccountMenu();
+  });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('#launcher-menu').hidden) closeLauncherMenu();
+    if (event.key === 'Escape') { closeLauncherMenu(); closeAccountMenu(); }
   });
 }
 
@@ -901,14 +1008,14 @@ async function download(name) {
 }
 
 async function deleteItem(name) {
-  if (!confirm(`要將「${name}」移至資源回收桶嗎？`)) return;
+  if (!await showAppConfirm(`要將「${name}」移至資源回收筒嗎？`, { title: '移至資源回收筒', confirmText: '移至回收筒', danger: true })) return;
   const query = new URLSearchParams({ shareId: state.shareId, path: joinedPath(name) });
   try { await api(`/api/files?${query}`, { method: 'DELETE' }); state.selectedItems.delete(name); notify('已移至資源回收桶。'); await loadFiles(); }
   catch (error) { notify(error.message, true); }
 }
 
 async function renameItem(name) {
-  const newName = prompt('請輸入新的檔案或資料夾名稱', name);
+  const newName = await showAppPrompt('請輸入新的檔案或資料夾名稱。', { title: '重新命名', inputLabel: '新名稱', value: name, confirmText: '儲存名稱' });
   if (newName === null || newName.trim() === name) return;
   try {
     await api('/api/files/rename', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: joinedPath(name), newName }) });
@@ -921,7 +1028,7 @@ async function renameItem(name) {
 async function batchFileOperation(operation) {
   const names = [...state.selectedItems];
   if (!names.length || !state.canWrite) return;
-  const destinationPath = prompt('請輸入 Nanako 資料空間內的目的地資料夾路徑；留白代表主資料夾。', '');
+  const destinationPath = await showAppPrompt('請輸入 Nanako 資料空間內的目的地資料夾路徑；留白代表主資料夾。', { title: operation === 'move' ? '批次移動' : '批次複製', inputLabel: '目的地資料夾路徑', confirmText: '開始操作' });
   if (destinationPath === null) return;
   const labels = { move: '移動', copy: '複製' };
   for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = true;
@@ -941,7 +1048,7 @@ async function batchFileOperation(operation) {
 
 async function batchDeleteItems() {
   const names = [...state.selectedItems];
-  if (!names.length || !state.canWrite || !confirm(`確定要將選取的 ${names.length} 個項目移至資源回收桶嗎？`)) return;
+  if (!names.length || !state.canWrite || !await showAppConfirm(`確定要將選取的 ${names.length} 個項目移至資源回收桶嗎？`, { title: '批次移至資源回收筒', confirmText: '移至回收筒', danger: true })) return;
   for (const id of ['#batch-move', '#batch-copy', '#batch-delete']) $(id).disabled = true;
   let succeeded = 0;
   const errors = [];
@@ -963,7 +1070,7 @@ async function loadTrash() {
     const query = new URLSearchParams({ shareId: state.shareId }); const { items } = await api(`/api/trash?${query}`); const body = $('#trash-list'); body.replaceChildren(); $('#empty-trash').hidden = items.length !== 0;
     for (const item of items) {
       const row = document.createElement('tr'); const name = document.createElement('td'); name.textContent = item.name; const date = document.createElement('td'); date.textContent = formatDate(item.deletedAt); const type = document.createElement('td'); type.textContent = item.isDirectory ? '資料夾' : '檔案'; const actions = document.createElement('td'); const restore = document.createElement('button'); restore.className = 'text-action'; restore.textContent = '還原'; restore.addEventListener('click', async () => { await api('/api/trash/restore', { method: 'POST', body: JSON.stringify({ id: item.id }) }); notify('已還原。'); loadTrash(); }); actions.append(restore);
-      if (state.user.role === 'admin') { const remove = document.createElement('button'); remove.className = 'text-action danger'; remove.textContent = '永久刪除'; remove.addEventListener('click', async () => { if (confirm(`永久刪除「${item.name}」？`)) { const q = new URLSearchParams({ id: item.id }); await api(`/api/trash?${q}`, { method: 'DELETE' }); loadTrash(); } }); actions.append(remove); }
+      if (state.user.role === 'admin') { const remove = document.createElement('button'); remove.className = 'text-action danger'; remove.textContent = '永久刪除'; remove.addEventListener('click', async () => { if (await showAppConfirm(`永久刪除「${item.name}」？此動作無法復原。`, { title: '永久刪除檔案', confirmText: '永久刪除', danger: true })) { const q = new URLSearchParams({ id: item.id }); await api(`/api/trash?${q}`, { method: 'DELETE' }); loadTrash(); } }); actions.append(remove); }
       row.append(name, date, type, actions); body.append(row);
     }
   } catch (error) { notify(error.message, true); }
@@ -1358,7 +1465,7 @@ async function loadVaultTrash() {
       const actions = document.createElement('td'); const group = document.createElement('div'); group.className = 'vault-row-actions';
       const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'button secondary'; restore.textContent = '還原';
       restore.addEventListener('click', async () => {
-        if (!confirm(`將「${item.name}」還原至已上鎖檔案？`)) return;
+        if (!await showAppConfirm(`將「${item.name}」還原至已上鎖檔案？`, { title: '還原加密檔案', confirmText: '還原' })) return;
         try {
           await api(`/api/vault/trash/${encodeURIComponent(item.id)}/restore`, { method: 'POST', body: '{}' });
           await Promise.all([loadVaultObjects(), loadVaultTrash()]); setVaultMessage('加密空間檔案已還原。');
@@ -1366,7 +1473,7 @@ async function loadVaultTrash() {
       });
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '永久刪除';
       remove.addEventListener('click', async () => {
-        if (prompt(`永久刪除「${item.name}」的密文？此動作無法復原。\n\n請輸入：永久刪除`) !== '永久刪除') return;
+        if (await showAppPrompt(`永久刪除「${item.name}」的密文？此動作無法復原。\n請輸入「永久刪除」以確認。`, { title: '永久刪除加密檔案', inputLabel: '確認文字', requiredValue: '永久刪除', confirmText: '永久刪除', danger: true }) !== '永久刪除') return;
         try {
           await api(`/api/vault/trash/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '永久刪除' }) });
           await loadVaultTrash(); setVaultMessage('已永久刪除加密空間檔案。');
@@ -1391,7 +1498,7 @@ async function loadVaultBackups() {
       if (!item.invalid) {
         const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'button secondary'; restore.textContent = '還原缺少檔案';
         restore.addEventListener('click', async () => {
-          if (!confirm(`使用此備份還原目前加密空間缺少的檔案？已存在的物件不會覆寫。`)) return;
+          if (!await showAppConfirm('使用此備份還原目前加密空間缺少的檔案？已存在的物件不會覆寫。', { title: '還原加密備份', confirmText: '還原' })) return;
           try {
             const restored = await api(`/api/vault/backups/${encodeURIComponent(item.id)}/restore`, { method: 'POST', body: '{}' });
             await Promise.all([loadVaultObjects(), loadVaultTrash(), loadVaultRecovery()]);
@@ -1402,7 +1509,7 @@ async function loadVaultBackups() {
       }
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '刪除備份';
       remove.addEventListener('click', async () => {
-        if (prompt('刪除此 NanakoData 內的加密備份？此動作無法復原。\n\n請輸入：刪除備份') !== '刪除備份') return;
+        if (await showAppPrompt('刪除此 NanakoData 內的加密備份？此動作無法復原。請輸入「刪除備份」以確認。', { title: '刪除加密備份', inputLabel: '確認文字', requiredValue: '刪除備份', confirmText: '刪除備份', danger: true }) !== '刪除備份') return;
         try {
           await api(`/api/vault/backups/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: JSON.stringify({ confirmText: '刪除備份' }) });
           await loadVaultBackups(); setVaultMessage('加密備份已刪除。');
@@ -1466,7 +1573,7 @@ async function loadVaultRecovery() {
 }
 
 async function discardVaultOrphan(item) {
-  const confirmation = prompt(`這筆密文無法還原檔名或驗證內容。確認只清除加密空間中的孤兒密文，不會刪除 Nanako 資料空間中的任何來源檔案。\n\n請輸入：永久刪除孤兒密文\n識別碼：${item.id}`);
+  const confirmation = await showAppPrompt(`這筆密文無法還原檔名或驗證內容。確認只清除加密空間中的孤兒密文，不會刪除 Nanako 資料空間中的任何來源檔案。\n識別碼：${item.id}\n請輸入「永久刪除孤兒密文」以確認。`, { title: '清理孤兒密文', inputLabel: '確認文字', requiredValue: '永久刪除孤兒密文', confirmText: '永久刪除', danger: true });
   if (confirmation !== '永久刪除孤兒密文') return;
   try {
     await api(`/api/vault/orphans/${encodeURIComponent(item.id)}`, { method: 'POST', body: JSON.stringify({ confirmText: confirmation }) });
@@ -1495,7 +1602,7 @@ async function resolveVaultRecovery(item, action) {
     : item.sourceState === 'ciphertext-missing'
       ? `確認清除「${item.name}」失效的加密索引？Nanako 不會刪除 Nanako 資料空間中的來源檔案。`
       : `保留「${item.name}」的原始檔案，並結束這筆待確認作業？加密版本也會保留。`;
-  if (!confirm(prompt)) return;
+  if (!await showAppConfirm(prompt, { title: complete ? '完成中斷移入' : '保留或清理來源', confirmText: complete ? '完成上鎖' : '確認' })) return;
   try {
     await api(`/api/vault/recovery/${encodeURIComponent(item.id)}`, { method: 'POST', body: JSON.stringify({ action }) });
     await Promise.all([loadVaultRecovery(), loadVaultObjects(), loadVaultSource()]);
@@ -1586,7 +1693,39 @@ async function loadUsers() {
       const role = document.createElement('span'); role.className = 'user-role'; role.textContent = user.role === 'admin' ? '管理員' : '使用者';
       const status = document.createElement('span'); status.className = `user-role${user.isActive ? '' : ' user-disabled'}`; status.textContent = user.isActive ? '啟用中' : '已停用';
       badges.append(role, status); heading.append(identity, badges); row.append(heading);
-      if (user.role === 'user') {
+      if (user.role === 'user' || user.role === 'admin') {
+        const editName = document.createElement('button'); editName.type = 'button'; editName.className = 'button secondary user-edit-name-button'; editName.textContent = '編輯名稱';
+        editName.setAttribute('aria-label', `編輯 ${user.username} 的顯示名稱`);
+        editName.addEventListener('click', async () => {
+          if (user.id === state.user?.id) { openDisplayNameDialog(); return; }
+          const displayName = await showAppPrompt('這個名稱只用於 Nanako 畫面顯示與稱呼，不會變更登入帳號。留白會改為顯示登入帳號。', {
+            title: `編輯 ${user.username} 的顯示名稱`, inputLabel: '顯示名稱', value: user.displayName || '', confirmText: '儲存名稱',
+          });
+          if (displayName === null) return;
+          editName.disabled = true;
+          try {
+            await api(`/api/users/${encodeURIComponent(user.id)}`, { method: 'PATCH', body: JSON.stringify({ displayName }) });
+            notify('使用者顯示名稱已更新。');
+            await loadUsers();
+          } catch (error) { notify(error.message, true); }
+          finally { editName.disabled = false; }
+        });
+        badges.prepend(editName);
+        const isSelf = user.id === state.user?.id;
+        const resetPassword = document.createElement('button'); resetPassword.type = 'button'; resetPassword.className = 'button secondary user-reset-password-button'; resetPassword.textContent = isSelf ? '變更密碼' : '重設密碼';
+        resetPassword.setAttribute('aria-label', `${isSelf ? '變更' : '重設'} ${user.username} 的密碼`);
+        resetPassword.addEventListener('click', () => {
+          if (isSelf) { openChangePasswordDialog(); return; }
+          resetPasswordUserId = user.id;
+          const form = $('#reset-user-password-form'); form.reset();
+          $('#reset-user-password-title').textContent = `重設 ${user.username} 的密碼`;
+          const message = $('#reset-user-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
+          closeAccountMenu();
+          $('#reset-user-password-dialog').showModal();
+          form.elements.newPassword.focus();
+        });
+        badges.prepend(resetPassword);
+        if (user.role === 'user') {
         const details = document.createElement('details'); details.className = 'user-permission-details';
         const summary = document.createElement('summary'); summary.textContent = '權限與帳號狀態'; details.append(summary);
         const form = document.createElement('form'); form.className = 'form-stack user-permission-form';
@@ -1623,6 +1762,7 @@ async function loadUsers() {
           } finally { save.disabled = false; }
         });
         details.append(form); row.append(details);
+        }
       }
       body.append(row);
     }
@@ -2409,7 +2549,23 @@ $('#auth-form').addEventListener('submit', async (event) => {
   catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
 });
 
+function openChangePasswordDialog() {
+  closeAccountMenu();
+  const form = $('#change-password-form'); form.reset();
+  const message = $('#change-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
+  $('#change-password-dialog').showModal(); form.elements.currentPassword.focus();
+}
+
+function openDisplayNameDialog() {
+  closeAccountMenu();
+  const form = $('#display-name-form'); form.reset();
+  form.elements.displayName.value = state.user?.displayName || '';
+  const message = $('#display-name-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
+  $('#display-name-dialog').showModal(); form.elements.displayName.focus();
+}
+
 $('#logout-button').addEventListener('click', async () => {
+  closeAccountMenu();
   if (state.duplicateScanId && ['scanning', 'cancelling'].includes(state.duplicateScanStatus)) {
     const query = new URLSearchParams({ scanId: state.duplicateScanId });
     await api(`/api/duplicates/scan?${query}`, { method: 'DELETE' }).catch(() => {});
@@ -2418,18 +2574,10 @@ $('#logout-button').addEventListener('click', async () => {
   await persistActivePlayback(true);
   await api('/api/logout', { method: 'POST' }); closeAllWindows(); state.user = null; state.path = ''; showAuth(false);
 });
-$('#change-password-button').addEventListener('click', () => {
-  const form = $('#change-password-form'); form.reset();
-  const message = $('#change-password-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
-  $('#change-password-dialog').showModal(); form.elements.currentPassword.focus();
-});
-$('#display-name-button').addEventListener('click', () => {
-  const form = $('#display-name-form');
-  form.reset();
-  form.elements.displayName.value = state.user?.displayName || '';
-  const message = $('#display-name-message'); message.hidden = true; message.textContent = ''; message.classList.remove('error');
-  $('#display-name-dialog').showModal(); form.elements.displayName.focus();
-});
+$('#change-password-button').addEventListener('click', openChangePasswordDialog);
+$('#manage-password-button').addEventListener('click', openChangePasswordDialog);
+$('#display-name-button').addEventListener('click', openDisplayNameDialog);
+$('#manage-display-name-button').addEventListener('click', openDisplayNameDialog);
 $('#cancel-display-name').addEventListener('click', () => $('#display-name-dialog').close());
 $('#display-name-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2437,7 +2585,7 @@ $('#display-name-form').addEventListener('submit', async (event) => {
   submit.disabled = true;
   try {
     const { user } = await api('/api/me', { method: 'PATCH', body: JSON.stringify({ displayName: form.elements.displayName.value }) });
-    state.user = user; updateAccountIdentity(); $('#display-name-dialog').close(); closeLauncherMenu(); notify('顯示名稱已更新。');
+    state.user = user; updateAccountIdentity(); $('#display-name-dialog').close(); closeLauncherMenu(); closeAccountMenu(); notify('顯示名稱已更新。');
   } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
   finally { submit.disabled = false; }
 });
@@ -2452,6 +2600,22 @@ $('#change-password-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/password', { method: 'POST', body: JSON.stringify({ currentPassword: values.get('currentPassword'), newPassword: values.get('newPassword') }) });
     $('#change-password-dialog').close(); form.reset(); notify('密碼已更新，其他登入工作階段已撤銷。');
+  } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
+  finally { submit.disabled = false; }
+});
+$('#cancel-reset-user-password').addEventListener('click', () => { resetPasswordUserId = null; $('#reset-user-password-dialog').close(); });
+$('#reset-user-password-dialog').addEventListener('close', () => { resetPasswordUserId = null; });
+$('#reset-user-password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget; const values = new FormData(form); const message = $('#reset-user-password-message');
+  if (!resetPasswordUserId) return;
+  if (values.get('newPassword') !== values.get('confirmPassword')) {
+    message.textContent = '兩次輸入的新密碼不一致。'; message.classList.add('error'); message.hidden = false; return;
+  }
+  const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+  try {
+    await api(`/api/users/${encodeURIComponent(resetPasswordUserId)}`, { method: 'PATCH', body: JSON.stringify({ password: values.get('newPassword') }) });
+    $('#reset-user-password-dialog').close(); form.reset(); notify('使用者密碼已重設，其他登入工作階段已撤銷。');
   } catch (error) { message.textContent = error.message; message.classList.add('error'); message.hidden = false; }
   finally { submit.disabled = false; }
 });
@@ -2472,7 +2636,7 @@ $('#player-search').addEventListener('input', () => {
   clearTimeout(state.playerSearchTimer);
   state.playerSearchTimer = setTimeout(() => { state.playerSearch = $('#player-search').value; loadPlayer(); }, 400);
 });
-$('#new-folder').addEventListener('click', async () => { const name = prompt('請輸入資料夾名稱'); if (!name) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
+$('#new-folder').addEventListener('click', async () => { const name = await showAppPrompt('請輸入資料夾名稱。', { title: '新增資料夾', inputLabel: '資料夾名稱', confirmText: '建立資料夾' }); if (!name?.trim()) return; try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ shareId: state.shareId, path: state.path, name }) }); loadFiles(); } catch (error) { notify(error.message, true); } });
 $('#upload-file-label').addEventListener('click', (event) => { if ($('#file-input').disabled) { event.preventDefault(); event.stopPropagation(); } });
 $('#file-search').addEventListener('input', () => {
   clearTimeout(state.fileSearchTimer);
@@ -2538,7 +2702,7 @@ $('#vault-password-form').addEventListener('submit', async (event) => {
   finally { button.disabled = false; }
 });
 $('#vault-recovery-key-rotate').addEventListener('click', async () => {
-  if (state.vaultRecoveryCodePending && !confirm('重新產生會立即讓目前畫面上的舊復原金鑰失效。要繼續嗎？')) return;
+  if (state.vaultRecoveryCodePending && !await showAppConfirm('重新產生會立即讓目前畫面上的舊復原金鑰失效。要繼續嗎？', { title: '重新產生復原金鑰', confirmText: '重新產生', danger: true })) return;
   try {
     const result = await api('/api/vault/recovery-key', { method: 'POST', body: '{}' });
     showVaultRecoveryCode(result.recoveryCode);
@@ -2549,8 +2713,8 @@ $('#vault-recovery-key-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(code); setVaultMessage('復原金鑰已複製。請確認已貼到安全位置後再關閉提示。'); }
   catch { $('#vault-recovery-key-value').select(); setVaultMessage('無法自動複製；已選取復原金鑰，請手動複製並妥善保管。', true); }
 });
-$('#vault-recovery-key-saved').addEventListener('click', () => {
-  if (!confirm('確認已將復原金鑰妥善保管在 Nanako 資料空間以外的安全位置？關閉後無法再次檢視這組金鑰。')) return;
+$('#vault-recovery-key-saved').addEventListener('click', async () => {
+  if (!await showAppConfirm('確認已將復原金鑰妥善保管在 Nanako 資料空間以外的安全位置？關閉後無法再次檢視這組金鑰。', { title: '確認已保管復原金鑰', confirmText: '已妥善保管' })) return;
   clearVaultRecoveryCode(); setVaultMessage('已關閉復原金鑰提示；你仍可在加密空間解鎖後重新產生金鑰。');
 });
 $('#vault-source-share').addEventListener('change', (event) => { state.vaultSourceShareId = event.currentTarget.value; state.vaultSourcePath = ''; loadVaultSource(); });

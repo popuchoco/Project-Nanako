@@ -215,6 +215,22 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     (value) => value?.visible && value?.writable,
     'the initial writable file view',
   );
+  const accountMenu = await running.devtools.evaluate(`(() => {
+    document.querySelector('#desktop-account').click();
+    const menu = document.querySelector('#account-menu');
+    return {
+      visible: !menu.hidden,
+      expanded: document.querySelector('#desktop-account').getAttribute('aria-expanded'),
+      quickLinks: [...menu.querySelectorAll('[data-open-view]')].map((item) => item.dataset.openView),
+    };
+  })()`);
+  assert.equal(accountMenu.visible, true);
+  assert.equal(accountMenu.expanded, 'true');
+  assert.deepEqual(accountMenu.quickLinks.sort(), ['network', 'system', 'users']);
+  await running.devtools.evaluate(`(() => { document.querySelector('#desktop-home').click(); return true; })()`);
+  await waitForValue(running.devtools, `!document.querySelector('#view-tasks').hidden`, Boolean, 'the top-left Nanako logo opening Task Manager');
+  await running.devtools.evaluate(`(() => { document.querySelector('.desktop-icon[data-open-view="files"]').click(); return true; })()`);
+  await waitForValue(running.devtools, `!document.querySelector('#view-files').hidden`, Boolean, 'returning to File Manager');
   await running.devtools.evaluate(`(() => {
     document.querySelector('#desktop-account').click();
     document.querySelector('#display-name-button').click();
@@ -231,6 +247,28 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
   );
   assert.equal(customIdentity.account, 'Nanako 管理員');
   assert.equal(customIdentity.username, adminUsername);
+  await running.devtools.evaluate(`(() => document.querySelector('#dock-launcher').click())()`);
+  await running.devtools.evaluate(`new Promise((resolve) => setTimeout(resolve, 200))`);
+  const visualConsistency = await running.devtools.evaluate(`(() => {
+    const area = document.querySelector('#desktop-area').getBoundingClientRect();
+    const menu = document.querySelector('#launcher-menu').getBoundingClientRect();
+    const dock = document.querySelector('.desktop-dock').getBoundingClientRect();
+    return {
+      menuCentered: Math.abs((menu.left + menu.width / 2) - (area.left + area.width / 2)) < 2,
+      dockCentered: Math.abs((dock.left + dock.width / 2) - (area.left + area.width / 2)) < 2,
+      positions: { area: { left: area.left, width: area.width }, menu: { left: menu.left, width: menu.width }, dock: { left: dock.left, width: dock.width }, menuStyle: { left: getComputedStyle(document.querySelector('#launcher-menu')).left, translate: getComputedStyle(document.querySelector('#launcher-menu')).translate } },
+      menuIconCount: document.querySelectorAll('#launcher-menu .launcher-grid > button .launcher-icon svg').length,
+      menuIcons: document.querySelectorAll('#launcher-menu .launcher-grid > button').length,
+      shortcutInset: document.querySelector('.desktop-shortcuts').firstElementChild.getBoundingClientRect().left - document.querySelector('.desktop-shortcuts').getBoundingClientRect().left,
+      dialogsConsistent: [...document.querySelectorAll('dialog')].every((dialog) => dialog.classList.contains('confirm-dialog') || dialog.classList.contains('photo-dialog')),
+    };
+  })()`);
+  assert.equal(visualConsistency.menuCentered, true, `the dock launcher should open its menu in the desktop center (${JSON.stringify(visualConsistency)})`);
+  assert.equal(visualConsistency.dockCentered, true, 'the dock itself should remain centered');
+  assert.equal(visualConsistency.menuIconCount, visualConsistency.menuIcons, 'all launcher applications should use the unified SVG icon system');
+  assert.ok(visualConsistency.shortcutInset >= 4, 'desktop shortcut focus ring should have room inside its rail');
+  assert.equal(visualConsistency.dialogsConsistent, true, 'every app dialog should use the themed dialog style');
+  await running.devtools.evaluate(`(() => document.querySelector('#dock-launcher').click())()`);
   const shellLayout = await running.devtools.evaluate(`(() => {
     const bar = document.querySelector('.system-bar');
     const launcher = document.querySelector('#launcher-toggle');
@@ -250,8 +288,13 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
   assert.equal(shellLayout.shortcutsOverflowX, 'hidden');
   assert.ok(shellLayout.shortcutsScrollWidth <= shellLayout.shortcutsClientWidth, 'desktop shortcuts should not overflow horizontally');
   await running.devtools.evaluate(`(() => {
-    window.prompt = () => ${JSON.stringify(folderName)};
     document.querySelector('#new-folder').click();
+    return true;
+  })()`);
+  await waitForValue(running.devtools, `document.querySelector('#app-action-dialog').open`, Boolean, 'the branded create-folder prompt');
+  await running.devtools.evaluate(`(() => {
+    const input = document.querySelector('#app-action-input'); input.value = ${JSON.stringify(folderName)};
+    document.querySelector('#app-action-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     return true;
   })()`);
   await waitForValue(
@@ -327,6 +370,52 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
     'successful user creation feedback',
   );
   assert.equal(createdUser.username, '', 'the user form should reset only after successful creation.');
+  await waitForValue(
+    running.devtools,
+    `document.querySelector('#user-list')?.innerText || ''`,
+    (text) => text.includes(userUsername),
+    'the newly created account in the user list',
+  );
+  const managedControls = await running.devtools.evaluate(`(() => {
+    const rows = [...document.querySelectorAll('#user-list .user-card')];
+    const managed = rows.find((row) => row.innerText.includes(${JSON.stringify(userUsername)}));
+    const self = rows.find((row) => row.innerText.includes(${JSON.stringify(adminUsername)}));
+    return {
+      managed: [...managed.querySelectorAll('button')].map((button) => button.textContent.trim()),
+      self: [...self.querySelectorAll('button')].map((button) => button.textContent.trim()),
+    };
+  })()`);
+  assert.ok(managedControls.managed.includes('編輯名稱'));
+  assert.ok(managedControls.managed.includes('重設密碼'));
+  assert.ok(managedControls.self.includes('編輯名稱'), 'admin can manage their own display name from the user screen');
+  assert.ok(managedControls.self.includes('變更密碼'), 'admin can manage their own password from the user screen');
+  await running.devtools.evaluate(`(() => {
+    const row = [...document.querySelectorAll('#user-list .user-card')].find((item) => item.innerText.includes(${JSON.stringify(userUsername)}));
+    row.querySelector('.user-edit-name-button').click();
+    const dialog = document.querySelector('#app-action-dialog');
+    document.querySelector('#app-action-input').value = '家庭成員';
+    document.querySelector('#app-action-input').dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#app-action-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await waitForValue(running.devtools, `document.querySelector('#app-action-dialog').open`, (open) => !open, 'saving a managed user display name');
+  const managedName = await waitForValue(
+    running.devtools,
+    `fetch('/api/users').then((response) => response.json()).then(({ users }) => users.find((user) => user.username === ${JSON.stringify(userUsername)})?.displayName)` ,
+    (value) => value === '家庭成員',
+    'the managed user display name update',
+  );
+  assert.equal(managedName, '家庭成員');
+  await running.devtools.evaluate(`(() => {
+    const row = [...document.querySelectorAll('#user-list .user-card')].find((item) => item.innerText.includes(${JSON.stringify(userUsername)}));
+    row.querySelector('.user-reset-password-button').click();
+    const form = document.querySelector('#reset-user-password-form');
+    form.elements.newPassword.value = ${JSON.stringify(`${userPassword}-reset`)};
+    form.elements.confirmPassword.value = ${JSON.stringify(`${userPassword}-reset`)};
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await waitForValue(running.devtools, `document.querySelector('#reset-user-password-dialog').open`, (open) => !open, 'resetting a managed user password');
   await running.devtools.evaluate(`(() => {
     document.querySelector('#launcher-toggle').click();
     document.querySelector('#launcher-menu [data-open-view="tasks"]').click();
