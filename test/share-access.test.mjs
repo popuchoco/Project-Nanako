@@ -43,3 +43,15 @@ test('SMB access is limited to managed Nanako share roots', () => {
   assert.equal(evaluateSmbShareAccess({ user, share: { ...share, source_type: 'external' }, permission: { can_read: 1 }, operation: 'read' }).reason, 'share_out_of_scope');
   assert.equal(evaluateSmbShareAccess({ user, share, permission: { can_read: 1 }, operation: 'write' }).reason, 'permission_denied');
 });
+
+test('SMB file-operation vocabulary maps explicitly to existing per-share permissions', () => {
+  const readOnly = { can_read: 1, can_write: 0 };
+  for (const operation of ['query-directory', 'read-data', 'read-attributes']) {
+    assert.equal(evaluateSmbShareAccess({ user, share, permission: readOnly, operation }).allowed, true, operation);
+  }
+  for (const operation of ['create-file', 'create-directory', 'write-data', 'set-length', 'set-attributes', 'delete-file', 'delete-directory', 'rename', 'move', 'copy']) {
+    assert.equal(evaluateSmbShareAccess({ user, share, permission: readOnly, operation }).reason, 'permission_denied', operation);
+  }
+  assert.equal(evaluateSmbShareAccess({ user, share, permission: { can_read: 1, can_write: 1 }, operation: 'write-data' }).allowed, true);
+  assert.equal(evaluateSmbShareAccess({ user, share, permission: { can_read: 1, can_write: 1 }, operation: 'set-security-descriptor' }).reason, 'permission_denied');
+});

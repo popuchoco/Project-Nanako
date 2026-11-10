@@ -82,3 +82,13 @@ test('desktop shell contains independent Nanako application-window regions and s
   assert.doesNotMatch(html, /id="app-window"|id="dock-app"/, 'legacy shared-window shell should be removed');
 });
 
+test('experimental SMB checkbox starts locked and follows the verified Windows 11 24H2 gate', async () => {
+  const html = await readFile(path.join(root, 'public', 'index.html'), 'utf8');
+  const app = await readFile(path.join(root, 'public', 'app.js'), 'utf8');
+  assert.match(html, /id="smb-experimental-enabled" type="checkbox" disabled/);
+  assert.match(html, /僅限 Windows 11 24H2 以上|Windows 11 24H2 以上/);
+  assert.match(app, /checkbox\.disabled = !supported/);
+  assert.match(app, /api\('\/api\/smb\/experimental'/);
+  assert.match(app, /SMB 伺服器尚未整合/);
+});
+

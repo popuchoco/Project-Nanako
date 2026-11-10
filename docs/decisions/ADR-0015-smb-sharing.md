@@ -5,7 +5,7 @@
 
 ## 背景
 
-Nanako 是以 Windows 電腦提供類 NAS 體驗的 Electron 延伸作品。使用者明確要求網路分享與 SMB 必須納入產品，不可只做本機檔案服務或把 SMB 當成可選功能。Nanako 目前有本機帳號與分享資料夾讀寫權限，但目前 HTTP 服務僅綁定迴圈介面，SMB 與區域網路服務尚未實作。
+Nanako 是以 Windows 電腦提供類 NAS 體驗的 Electron 延伸作品。使用者明確要求網路分享與 SMB 必須納入產品，不可只做本機檔案服務或把 SMB 當成可選功能。Nanako 目前有本機帳號與分享資料夾讀寫權限；另有預設關閉的 HTTPS 網頁 LAN 存取，讓其他裝置透過瀏覽器介面登入並上傳／下載授權檔案。此 Web 存取不提供 SMB 協定或檔案總管網路分享，SMB 伺服器仍未實作。
 
 使用者提供的兩個參考專案定位不同：
 
@@ -34,9 +34,11 @@ Nanako 是以 Windows 電腦提供類 NAS 體驗的 Electron 延伸作品。使�
 
 ## 目前已實作的前置項目
 
-管理員可在 Nanako「網路狀態」檢視 Windows SMB Server 服務狀態、TCP 445 是否有人監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。該檢查使用唯讀 PowerShell 查詢；不建立／移除 Windows 分享、不啟停 `LanmanServer`、不設定防火牆，也不代表 Nanako SMB 分享已可用。伺服器引擎、分享管理與逐帳號認證仍尚未實作。
+管理員可在 Nanako「網路狀態」檢視 Windows SMB Server 服務狀態、TCP 445 是否有人監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。該檢查使用唯讀 PowerShell 查詢；不建立／移除 Windows 分享、不啟停 `LanmanServer`、不設定防火牆，也不代表 Nanako SMB 分享已可用。HTTPS 網頁 LAN 登入是一項獨立功能，提供瀏覽器檔案上傳／下載，但不提供 Windows 檔案總管 SMB 協定服務。SMB 引擎、分享管理與逐帳號認證仍未實作。
 
-Nanako 已將讀取／寫入授權判斷集中到共用政策函式，並由現有檔案 API 與測試使用；SMB 引擎候選的 Windows 相容性與權限缺口記錄於 [`docs/smb-prototype-results.md`](../smb-prototype-results.md)。該政策不代表 SMB 協定服務已啟動。
+目前網路狀態頁另提供預設關閉的實驗性 SMB 選擇：只有產品識別為 Windows 11 且 build ≥ 26100（24H2+）才可勾選；舊版、非 Windows 與無法確認版本時皆禁用，API 會再次檢查資格。此旗標只保存使用者選擇，不表示引擎、listener 或 Windows 分享已啟動。
+
+Nanako 已將讀取／寫入授權判斷集中到共用政策函式，並由現有檔案 API 與測試使用；另已建立 SMB 正規化檔案操作到既有每分享讀寫授權的明確映射，未知操作拒絕。SMB 引擎候選的 Windows 相容性與權限缺口記錄於 [`docs/smb-prototype-results.md`](../smb-prototype-results.md)。這些政策不代表 SMB 協定服務已啟動。
 
 ## 驗收條件
 

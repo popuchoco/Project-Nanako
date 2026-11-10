@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { BlobWriter, TextReader, ZipWriter } from '@zip.js/zip.js';
 import { startServer } from '../src/server.mjs';
-import { readWindowsSmbStatus } from '../src/windows-smb-status.mjs';
+import { isWindows11_24H2OrLater, readWindowsSmbStatus } from '../src/windows-smb-status.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -1867,7 +1867,7 @@ test('login and vault unlock throttles stay isolated for the same user', async (
   assert.equal(unlockDuringLoginLock.response.status, 200);
 });
 
-test('SMB status is an administrator-only, read-only preflight and never claims Nanako sharing is ready', async (t) => {
+test('SMB status is admin-only and never claims Nanako sharing is ready', async (t) => {
   let probeCount = 0;
   const { request, setup } = await setupServer(t, {
     smbStatusProbe: async () => {
@@ -1881,6 +1881,8 @@ test('SMB status is an administrator-only, read-only preflight and never claims 
   assert.equal(adminStatus.body.serverService, 'Running');
   assert.equal(adminStatus.body.port445Listening, true);
   assert.equal(adminStatus.body.nanakoSmbReady, false);
+  assert.equal(adminStatus.body.experimentalSmb.enabled, false);
+  assert.equal(adminStatus.body.experimentalSmb.serviceReady, false);
   assert.equal(probeCount, 1);
 
   const created = await request('/api/users', {
@@ -1909,14 +1911,93 @@ test('Windows SMB status probe validates the host response and avoids invoking P
     run: async (file, args) => {
       assert.equal(file, 'powershell.exe');
       assert.equal(args.includes('-NoProfile'), true);
-      return { stdout: JSON.stringify({ serverService: 'Running', port445Listening: true, shareManagementAvailable: true }) };
+      return { stdout: JSON.stringify({
+        serverService: 'Running', port445Listening: true, shareManagementAvailable: true,
+        productName: 'Windows 11 Pro', displayVersion: '24H2', currentBuild: 26100, supportsExperimentalSmb: true,
+      }) };
     },
   });
   assert.equal(detected.detected, true);
   assert.equal(detected.serverService, 'Running');
   assert.equal(detected.port445Listening, true);
+  assert.deepEqual(detected.windowsVersion, { productName: 'Windows 11 Pro', displayVersion: '24H2', currentBuild: 26100, supportsExperimentalSmb: true });
 
   const malformed = await readWindowsSmbStatus({ platform: 'win32', run: async () => ({ stdout: '{"serverService":"Running"}' }) });
   assert.equal(malformed.detected, false);
   assert.equal(malformed.serverService, 'Unknown');
+  assert.equal(malformed.windowsVersion.supportsExperimentalSmb, false);
+});
+
+test('experimental SMB is restricted to Windows 11 24H2+, defaults off and clears after a downgrade', async (t) => {
+  assert.equal(isWindows11_24H2OrLater({ productName: 'Windows 11 Pro', currentBuild: 26100 }), true);
+  assert.equal(isWindows11_24H2OrLater({ productName: 'Windows 11 Pro', currentBuild: 22631 }), false);
+  assert.equal(isWindows11_24H2OrLater({ productName: 'Windows Server 2025 Standard', currentBuild: 26100 }), false);
+  const versionStatus = (productName, displayVersion, currentBuild) => ({
+    supported: true,
+    detected: true,
+    serverService: 'Stopped',
+    port445Listening: false,
+    shareManagementAvailable: true,
+    message: null,
+    windowsVersion: {
+      productName,
+      displayVersion,
+      currentBuild,
+      supportsExperimentalSmb: isWindows11_24H2OrLater({ productName, currentBuild }),
+    },
+  });
+  let smbStatus = versionStatus('Windows 10 Pro', '22H2', 19045);
+  const harness = await setupServer(t, { smbStatusProbe: async () => smbStatus });
+  const { cookie } = await harness.setup();
+  const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+
+  const windows10 = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(windows10.body.experimentalSmb.supportedOs, false);
+  assert.equal(windows10.body.experimentalSmb.enabled, false);
+  const rejected = await harness.request('/api/smb/experimental', {
+    method: 'POST', headers: auth, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(rejected.response.status, 409);
+  assert.equal(rejected.body.error, 'smb_os_not_supported');
+
+  smbStatus = versionStatus('Windows 11 Pro', '23H2', 22631);
+  const windows11_23h2 = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(windows11_23h2.body.experimentalSmb.supportedOs, false);
+
+  smbStatus = versionStatus('Windows 11 Pro', '24H2', 26100);
+  const supported = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(supported.body.experimentalSmb.supportedOs, true);
+  assert.equal(supported.body.experimentalSmb.enabled, false, 'the supported OS default is still disabled');
+  const enabled = await harness.request('/api/smb/experimental', {
+    method: 'POST', headers: auth, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(enabled.response.status, 200);
+  assert.equal(enabled.body.experimentalSmb.enabled, true);
+  assert.equal(enabled.body.experimentalSmb.serviceReady, false, 'the option does not claim a running server');
+
+  await harness.restart();
+  const persisted = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(persisted.body.experimentalSmb.enabled, true);
+
+  smbStatus = versionStatus('Windows 10 Pro', '22H2', 19045);
+  const downgraded = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(downgraded.body.experimentalSmb.enabled, false);
+  smbStatus = versionStatus('Windows 11 Pro', '24H2', 26100);
+  const upgradedAgain = await harness.request('/api/smb/status', { headers: { Cookie: cookie } });
+  assert.equal(upgradedAgain.body.experimentalSmb.enabled, false, 'a stale enabled preference is cleared on unsupported OS');
+
+  const regularUser = await harness.request('/api/users', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ username: 'regular-smb', password: 'regular-smb-passphrase-2026', permissions: [] }),
+  });
+  assert.equal(regularUser.response.status, 201);
+  const login = await harness.request('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'regular-smb', password: 'regular-smb-passphrase-2026' }),
+  });
+  const denied = await harness.request('/api/smb/experimental', {
+    method: 'POST', headers: { Cookie: login.response.headers.get('set-cookie').split(';')[0], 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(denied.response.status, 403);
 });

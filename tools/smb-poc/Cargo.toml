@@ -1,0 +1,11 @@
+[package]
+name = "nanako-smb-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+smb-server = { git = "https://github.com/paltaio/rust-smb-server.git", rev = "c57fe2c1e58f3bb0882b4e762a89522824d16ccd" }
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

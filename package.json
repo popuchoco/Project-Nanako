@@ -1,7 +1,7 @@
 {
   "name": "project-nanako",
-  "description": "本機優先的 Windows Electron 檔案空間原型，提供多使用者顯示名稱、桌面視窗操作、檔案傳輸監看與網路診斷；區域網路分享尚未開放。",
-  "version": "0.3.0-rc.3",
+  "description": "Windows Electron 檔案空間原型，提供本機帳號與權限、桌面操作、傳輸監看及預設關閉的 HTTPS 區域網路網頁登入；SMB 分享仍在開發。",
+  "version": "0.3.0-rc.4",
   "license": "MPL-2.0",
   "private": true,
   "type": "module",
@@ -50,7 +50,9 @@
       "!node_modules/@zip.js/zip.js/release.sh",
       "!node_modules/@zip.js/zip.js/sync-versions.js",
       "!node_modules/@zip.js/zip.js/index.d.ts",
-      "!node_modules/@zip.js/zip.js/index.d.cts"
+      "!node_modules/@zip.js/zip.js/index.d.cts",
+      "!node_modules/selfsigned/.claude/**",
+      "!node_modules/selfsigned/.nvmrc"
     ],
     "win": {
       "icon": "electron/assets/nanako.ico",
@@ -86,6 +88,7 @@
     }
   },
   "dependencies": {
-    "@zip.js/zip.js": "2.24.0"
+    "@zip.js/zip.js": "2.24.0",
+    "selfsigned": "5.5.0"
   }
 }

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { Server as HttpsServer } from 'node:https';
+import { createServer as createHttpsServer } from 'node:https';
 import { createReadStream } from 'node:fs';
 import { mkdir, lstat, stat, statfs } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +34,7 @@ import { probeExternalNetwork } from './network-probe.mjs';
 import { isShareOperationAllowed } from './share-access.mjs';
 import { ensureThrottleSchema, pruneExpiredThrottles } from './throttle-store.mjs';
 import { createTransferMonitor } from './transfers.mjs';
+import { isLanPeerAllowed, isLanPort, publicLanStatus, selectLanInterface } from './network-access.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -245,7 +246,7 @@ async function collectSystemInformation(dataDir) {
   };
 }
 
-export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus, externalNetworkProbe = probeExternalNetwork, now = () => Date.now() } = {}) {
+export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', port = 8765, smbStatusProbe = readWindowsSmbStatus, externalNetworkProbe = probeExternalNetwork, lanCertificateProvider = null, networkInterfaceProvider = listNetworkInterfaces, now = () => Date.now() } = {}) {
   if (!dataDir) dataDir = path.join(projectRoot, 'NanakoData', 'data');
   if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
     throw new Error('此原型僅允許本機連線；區域網路連線尚未開放。');
@@ -344,7 +345,9 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     if (method === 'POST' && route === '/api/duplicates/cleanup') return { action: '整理重複檔案副本', target: 'Nanako 資源回收桶' };
     if (method === 'POST' && route === '/api/audit-settings') return { action: '更新操作紀錄保留期限', target: '操作紀錄設定' };
     if (method === 'DELETE' && route === '/api/audit-logs') return { action: '刪除所有操作紀錄', target: '所有使用者' };
+    if (method === 'POST' && route === '/api/network/lan') return { action: '變更區域網路登入', target: '網路存取設定' };
     if (method === 'GET' && route === '/api/smb/status') return { action: '查看 SMB 伺服器狀態', target: 'Windows SMB 前置檢查' };
+    if (method === 'POST' && route === '/api/smb/experimental') return { action: '變更實驗性 SMB 設定', target: 'SMB 實驗性功能' };
     return null;
   }
 
@@ -385,12 +388,109 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   }
   const duplicatesRouter = createDuplicatesRouter({ db, dataDir, requirePermission, shareRoot, permission, getUserById, withPathLocks, managedTrashPath, writeOperationLog });
   const archiveRouter = createArchiveRouter({ dataDir, requirePermission, shareRoot });
-  const smbRouter = createSmbRouter({ smbStatusProbe, collectWindowsExecutionState, listNetworkInterfaces, getPort: () => server.address()?.port, externalNetworkProbe });
 
   let closed = false;
   let allowedOrigins = new Set();
   let allowedHosts = new Set();
-  const server = createServer(async (req, res) => {
+  let lanServer = null;
+  let lanConfig = { enabled: false, address: '', port: 8765 };
+  let lanError = '';
+  let lanFingerprint = '';
+  let smbExperimentalEnabled = db.prepare("SELECT setting_value FROM app_settings WHERE setting_key = 'smb_experimental_enabled'").get()?.setting_value === 'true';
+  const setSmbExperimentalEnabled = (enabled) => {
+    smbExperimentalEnabled = enabled === true;
+    db.prepare(`INSERT INTO app_settings(setting_key, setting_value) VALUES('smb_experimental_enabled', ?)
+      ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`).run(String(smbExperimentalEnabled));
+  };
+  const getSmbExperimentalEnabled = () => smbExperimentalEnabled;
+  const lanStatus = () => publicLanStatus({ ...lanConfig, listening: Boolean(lanServer?.listening), fingerprint: lanFingerprint, error: lanError });
+  const networkInterfaces = () => networkInterfaceProvider();
+  const persistLanConfig = (config) => db.prepare(`INSERT INTO app_settings(setting_key, setting_value) VALUES('lan_access', ?)
+    ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`).run(JSON.stringify(config));
+
+  async function closeLanServer() {
+    if (!lanServer) return;
+    const oldServer = lanServer;
+    lanServer = null;
+    const oldPort = oldServer.address()?.port;
+    oldServer.closeAllConnections?.();
+    await new Promise((resolve) => oldServer.close(() => resolve()));
+    if (oldPort) {
+      allowedOrigins.delete(`https://${lanConfig.address}:${oldPort}`);
+      allowedHosts.delete(`${lanConfig.address}:${oldPort}`);
+    }
+    lanFingerprint = '';
+  }
+
+  async function startLanServer(config) {
+    const interfaceInfo = selectLanInterface(networkInterfaces(), config.address);
+    if (!interfaceInfo) throw fail(400, 'lan_interface_unavailable', '請選擇目前已連線的私有 IPv4 網路介面。');
+    if (!isLanPort(config.port)) throw fail(400, 'invalid_lan_port', '區域網路服務連接埠須介於 1024 至 65535。');
+    if (typeof lanCertificateProvider !== 'function') throw fail(503, 'lan_tls_unavailable', '安全憑證服務未就緒，無法安全開放區域網路登入。');
+    const credentials = await lanCertificateProvider(interfaceInfo.address);
+    const candidate = createHttpsServer({ key: credentials.key, cert: credentials.cert, minVersion: 'TLSv1.2' }, requestHandler);
+    await new Promise((resolve, reject) => {
+      const onError = (error) => { candidate.off('listening', onListening); reject(error); };
+      const onListening = () => { candidate.off('error', onError); resolve(); };
+      candidate.once('error', onError);
+      candidate.once('listening', onListening);
+      candidate.listen(config.port, interfaceInfo.address);
+    }).catch((error) => {
+      try { candidate.close(); } catch { /* listener never reached the listening state */ }
+      throw fail(409, 'lan_bind_failed', `無法在 ${interfaceInfo.address}:${config.port} 啟動安全區域網路服務：${error.code === 'EADDRINUSE' ? '連接埠已被使用' : error.message}`);
+    });
+    lanServer = candidate;
+    lanFingerprint = credentials.fingerprint || '';
+    lanConfig = { enabled: true, address: interfaceInfo.address, port: candidate.address().port };
+    allowedOrigins.add(`https://${lanConfig.address}:${lanConfig.port}`);
+    allowedHosts.add(`${lanConfig.address}:${lanConfig.port}`);
+    lanError = '';
+  }
+
+  async function setLanAccess(settings) {
+    if (!settings.enabled) {
+      await closeLanServer();
+      lanConfig = { enabled: false, address: '', port: Number.isInteger(settings.port) && isLanPort(settings.port) ? settings.port : lanConfig.port };
+      lanError = '';
+      persistLanConfig(lanConfig);
+      return lanStatus();
+    }
+    const next = { enabled: true, address: settings.address, port: Number(settings.port) };
+    if (lanServer && lanConfig.address === next.address && lanConfig.port === next.port) return lanStatus();
+    const previous = { ...lanConfig };
+    await closeLanServer();
+    try {
+      await startLanServer(next);
+      persistLanConfig(lanConfig);
+      return lanStatus();
+    } catch (error) {
+      lanError = error.message;
+      if (previous.enabled) {
+        try {
+          await startLanServer(previous);
+          persistLanConfig(lanConfig);
+        } catch { lanConfig = { enabled: false, address: '', port: previous.port }; }
+      } else {
+        lanConfig = { enabled: false, address: '', port: next.port };
+      }
+      if (error.status) throw error;
+      throw fail(409, 'lan_bind_failed', error.message);
+    }
+  }
+
+  const smbRouter = createSmbRouter({
+    smbStatusProbe,
+    collectWindowsExecutionState,
+    listNetworkInterfaces: networkInterfaces,
+    getPort: () => server.address()?.port,
+    externalNetworkProbe,
+    getLanStatus: lanStatus,
+    setLanAccess,
+    getSmbExperimentalEnabled,
+    setSmbExperimentalEnabled,
+  });
+
+  const requestHandler = async (req, res) => {
     let auditEvent = null;
     let auditLogged = false;
     const setAudit = (actor, action, target) => {
@@ -409,14 +509,24 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     try {
-      if (!isLoopbackAddress(req.socket.remoteAddress)) {
-        throw fail(403, 'remote_denied', '僅允許本機連線。');
-      }
       const hostHeader = req.headers.host;
       if (typeof hostHeader !== 'string' || !allowedHosts.has(hostHeader)) {
         throw fail(403, 'host_denied', '主機名稱不符。');
       }
-      const scheme = server instanceof HttpsServer ? 'https' : 'http';
+      const scheme = req.socket.encrypted ? 'https' : 'http';
+      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+        const interfaceInfo = selectLanInterface(networkInterfaces(), lanConfig.address);
+        const peerAllowed = req.socket.encrypted && isLanPeerAllowed({
+          peerAddress: req.socket.remoteAddress,
+          localAddress: req.socket.localAddress,
+          host: hostHeader,
+          port: lanConfig.port,
+          origin: req.headers.origin,
+          interfaceInfo,
+          enabled: Boolean(lanServer?.listening && lanConfig.enabled),
+        });
+        if (!peerAllowed) throw fail(403, 'remote_denied', '僅允許本機或已啟用區域網路中的安全連線。');
+      }
       const url = new URL(req.url, `${scheme}://${hostHeader}`);
       const method = req.method || 'GET';
       const route = url.pathname;
@@ -580,7 +690,7 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
           return json(res, 200, { ok: true });
         }
         if (await archiveRouter.handleArchiveRoute({ req, res, method, route, user, setAuditTarget: (target) => { if (auditEvent) auditEvent.target = target; } })) return;
-        if (await smbRouter.handleSmbRoute({ res, method, route, user })) return;
+        if (await smbRouter.handleSmbRoute({ req, res, method, route, user, setAuditTarget: (target) => { if (auditEvent) auditEvent.target = target; } })) return;
         throw fail(404, 'not_found', '找不到這個功能。');
       }
 
@@ -600,7 +710,8 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       if (status === 500) console.error(error);
       return json(res, status, { error: error.code || 'internal_error', message: status === 500 ? '伺服器發生錯誤。' : error.message });
     }
-  });
+  };
+  const server = createServer(requestHandler);
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -609,6 +720,22 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
   const allowlists = buildLoopbackOriginAllowlist(server);
   allowedOrigins = allowlists.origins;
   allowedHosts = allowlists.hosts;
+  const savedLanConfig = db.prepare("SELECT setting_value FROM app_settings WHERE setting_key = 'lan_access'").get()?.setting_value;
+  if (savedLanConfig) {
+    try {
+      const parsed = JSON.parse(savedLanConfig);
+      if (parsed?.enabled === true && typeof parsed.address === 'string' && isLanPort(Number(parsed.port))) {
+        lanConfig = { enabled: true, address: parsed.address, port: Number(parsed.port) };
+        await startLanServer(lanConfig);
+      } else if (Number.isInteger(Number(parsed?.port)) && isLanPort(Number(parsed.port))) {
+        lanConfig = { enabled: false, address: '', port: Number(parsed.port) };
+      }
+    } catch (error) {
+      lanError = error.message;
+      lanConfig = { enabled: false, address: '', port: lanConfig.port };
+      console.error('Nanako 區域網路服務未能恢復。', error.message);
+    }
+  }
 
   const auditPurgeTimer = setInterval(purgeExpiredAuditLogs, 60 * 60 * 1000);
   auditPurgeTimer.unref();
@@ -624,11 +751,13 @@ export async function startServer({ dataDir, storageRoot, host = '127.0.0.1', po
       const duplicateScanPromises = duplicatesRouter.abortAll();
       archiveRouter.abortAll();
       const closeServer = new Promise((done) => server.close(done));
+      const closeLan = closeLanServer();
       const lockPromises = vaultRouter.lockAllVaultKeys();
       server.closeAllConnections?.();
       void Promise.allSettled([
         ...duplicateScanPromises,
         ...lockPromises,
+        closeLan,
         closeServer,
       ]).then((results) => {
         db.close();

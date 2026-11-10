@@ -1,6 +1,6 @@
 # SMB 區域網路分享實作規劃
 
-此功能是 Nanako 的必要範圍，但目前版本尚未開放區域網路或 SMB 連線。本文件拆分實作階段與驗收條件；進度只有在服務端、UI 與跨裝置測試通過後才會更新為完成。
+此功能是 Nanako 的必要範圍。Nanako 另有 HTTPS 網頁 LAN 登入原型，使用者可透過瀏覽器介面上傳／下載檔案；它不會提供 SMB 連線，也不能視為 SMB 分享。SMB 實驗性開關目前只保存啟用選擇，不啟動服務。本文件拆分 SMB 實作階段與驗收條件；進度只有在協定服務端、UI 與跨裝置測試通過後才會更新為完成。
 
 ## 參考專案的適用範圍
 
@@ -15,8 +15,10 @@
 
 - [x] Nanako 管理員介面唯讀顯示 Windows SMB Server 服務、TCP 445 使用狀態、分享管理命令可用性及目前程序提升狀態。這只供實作前置診斷，不會建立 Windows 分享或改變主機設定。
 - [x] 建立共用的逐帳號／逐分享讀寫授權政策，未知 SMB 操作預設拒絕，外部路徑分享一律拒絕；現有檔案 API 已改用同一套操作判斷。
+- [x] 為 SMB VFS 前置建立正規化檔案操作分類，將目錄查詢／讀取與建立／寫入／刪除／重新命名映射到 Nanako 每分享權限，未知命令 fail-closed；此政策測試不代表 SMB 協定已啟動。
 - [x] 初步驗證數個可封裝 SMB2／SMB3 Server 候選；目前候選皆未同時通過 Windows 測試與 Nanako 逐帳號授權門檻，結果見 [`smb-prototype-results.md`](smb-prototype-results.md)。不以 SMB 用戶端套件充當 Server。
-- [ ] 優先驗證 `paltaio/rust-smb-server` 0.8.0 Windows 編譯、SMB2/3 localhost 互通、逐分享授權、NanakoData 根目錄隔離、簽章／加密與正常停止；此候選仍未採用。下一 bounded slice 已定義於 [`smb-v04-slice-0.md`](smb-v04-slice-0.md)，限制與憑證整合缺口記於 [`smb-prototype-results.md`](smb-prototype-results.md)；尚未完成 Windows 互通，不能勾選。
+- [x] 新增實驗性 SMB 功能旗標：只有偵測為 Windows 11 且 build ≥ 26100（24H2+）時可由管理員勾選；其他 OS／版本一律預設關閉、UI 禁用，API 也拒絕啟用。旗標只保存選擇，不代表 SMB listener 或產品伺服器已啟動。
+- [ ] 優先驗證 `paltaio/rust-smb-server` 0.8.0 Windows 編譯、SMB2/3 localhost 互通、逐分享授權、NanakoData 根目錄隔離、簽章／加密與正常停止；此候選仍未採用。Windows build 與 Impacket SMB 3.1.1 smoke 已通過，但 Windows 原生 client alternate-port、路徑隔離、鎖定／並行／重連等 gate 尚未完成；進度見 [`smb-v04-slice-0.md`](smb-v04-slice-0.md) 與 [`smb-prototype-results.md`](smb-prototype-results.md)，所以本項維持未勾選。
 - 用小型 NanakoData 測試目錄驗證協定交涉、檔案列舉、讀取／寫入、建立目錄、重新命名、刪除、並行連線、檔案鎖定與斷線復原。
 - 驗證使用者權限映射：同一 SMB 連線不得因知道其他分享名稱或路徑而跨越 Nanako 帳號授權。
 - 驗證伺服器端排除資源回收桶、操作紀錄、資料庫、密碼雜湊與任何暫存項目。不可只依賴隱藏屬性或 Renderer 過濾。

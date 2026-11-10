@@ -9,6 +9,11 @@ import { clearThrottle, getThrottle, recordFailure, ThrottleCapacityError } from
 const scrypt = promisify(crypto.scrypt);
 export const SESSION_SECONDS = 12 * 60 * 60;
 
+function sessionCookie(req, token, maxAge) {
+  const secure = req.socket?.encrypted ? '; Secure' : '';
+  return `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
+}
+
 export function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -106,7 +111,7 @@ export function createAuthRouter(ctx) {
       await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot, false);
       await mkdir(newShareRoot);
       await rejectSymlinkTraversal(dataDir, dataDir, newShareRoot);
-      json(res, 201, { user: getUserById.get(userId) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
+      json(res, 201, { user: getUserById.get(userId) }, { 'Set-Cookie': sessionCookie(req, token, SESSION_SECONDS) });
       return true;
     }
     if (route === '/api/login' && method === 'POST') {
@@ -138,7 +143,7 @@ export function createAuthRouter(ctx) {
       setAudit(user, '登入', user.username);
       const token = crypto.randomBytes(32).toString('base64url');
       db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, now() + SESSION_SECONDS * 1000);
-      json(res, 200, { user: getUserById.get(user.id) }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
+      json(res, 200, { user: getUserById.get(user.id) }, { 'Set-Cookie': sessionCookie(req, token, SESSION_SECONDS) });
       return true;
     }
     if (route === '/api/logout' && method === 'POST') {
@@ -147,7 +152,7 @@ export function createAuthRouter(ctx) {
       const signedOutUser = session ? getUserById.get(session.user_id) : null;
       if (signedOutUser) { setAudit(signedOutUser, '登出', signedOutUser.username); await lockVaultKey(signedOutUser.id); }
       if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
-      json(res, 200, { ok: true }, { 'Set-Cookie': 'localnas_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+      json(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
       return true;
     }
     return false;
@@ -177,7 +182,7 @@ export function createAuthRouter(ctx) {
       await lockVaultKey(user.id);
       const token = crypto.randomBytes(32).toString('base64url');
       db.prepare('INSERT INTO sessions(token_hash, user_id, expires_at) VALUES(?,?,?)').run(hashToken(token), user.id, now() + SESSION_SECONDS * 1000);
-      json(res, 200, { ok: true }, { 'Set-Cookie': `localnas_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_SECONDS}` });
+      json(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, token, SESSION_SECONDS) });
       return true;
     }
     return false;

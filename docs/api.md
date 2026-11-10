@@ -1,12 +1,13 @@
 # 本機 API（原型）
 
-> 目前 API 是隨程式提供的內部本機介面，不是穩定的外部整合 API。僅綁定迴圈介面，尚無 API Token、版本相容承諾或區域網路存取。端點異動時請同步更新此文件與測試。
+> 目前 API 是隨程式提供的內部介面，不是穩定的外部整合 API，尚無 API Token 或版本相容承諾。服務預設只綁定迴圈介面；Electron 桌面版可由管理員選擇性啟用單一私有 IPv4 網卡的 HTTPS 網頁登入。其他裝置登入後，透過同一 Nanako 網頁介面與檔案 API 上傳／下載授權範圍內的檔案；這不是 SMB 協定服務。命令列模式仍僅支援本機。端點異動時請同步更新此文件與測試。
 
 ## 共通規則
 
-- Base URL：`http://127.0.0.1:<port>`。Electron 模式使用隨機連接埠；命令列模式預設 `8765`。
+- 本機 Base URL：`http://127.0.0.1:<port>`。Electron 模式使用隨機連接埠；命令列模式預設 `8765`。選擇性 LAN Base URL 為管理員選定的 `https://<私有 IPv4>:<port>`。
 - JSON 請求使用 `Content-Type: application/json`；檔案上傳為原始 request body。
-- 登入後使用伺服器簽發的 `HttpOnly` Cookie。瀏覽器介面會自動帶入 Cookie；目前不支援 API Token 或跨來源整合。
+- 登入後使用伺服器簽發的 `HttpOnly; SameSite=Strict` Cookie；HTTPS LAN 工作階段另加 `Secure`。瀏覽器介面會自動帶入 Cookie；目前不支援 API Token 或跨來源整合。
+- LAN 預設關閉；只可綁定一個有效 RFC1918 私有 IPv4 介面、TCP 1024–65535 的明確連接埠，並限制來源在該網卡子網路。TLS 使用自簽憑證，需在 Nanako 畫面比對 SHA-256 指紋；不修改 Windows 防火牆或路由器設定。
 - 一般錯誤格式：`{"error":"錯誤代碼","message":"繁體中文說明"}`。
 - 需要登入的 API 未提供有效工作階段時回傳 `401`；權限不足回傳 `403`。
 
@@ -40,8 +41,11 @@
 | `GET /api/users` | 是 | 僅管理員可列出使用者、啟用狀態與各資料空間權限。 |
 | `POST /api/users` | 是 | 僅管理員；JSON `{ "username", "password", "permissions": [{ "shareId", "canRead", "canWrite" }] }`。 |
 | `PATCH /api/users/{userId}` | 是 | 僅管理員；一般使用者可調整資料空間權限及 `isActive`；停用會立即撤銷該使用者所有工作階段。不可修改自己的帳號，也不可用此端點修改管理員帳號。 |
-| `GET /api/network` | 是 | 回報目前本機服務資訊與網路介面清單；不會啟用區域網路連線或改變網路設定。 |
-| `GET /api/smb/status` | 是 | 僅管理員；唯讀檢查 Windows `LanmanServer` 服務、TCP 445 是否正在監聽、`New-SmbShare` 命令是否可用，以及 Nanako 程序是否已提升。此為前置診斷，不會建立分享、啟停 Windows 服務或修改防火牆；`nanakoSmbReady` 目前固定為 `false`。 |
+| `GET /api/network` | 是 | 回報本機服務連接埠、網路介面清單，以及 LAN 是否啟用、網址與 TLS 公開憑證指紋；不回傳 TLS 私鑰。 |
+| `POST /api/network/lan` | 是 | 僅管理員；JSON `{ "enabled": true, "address": "192.168.1.10", "port": 8765 }` 可啟用／切換所選私有 IPv4 網卡與服務連接埠；`{ "enabled": false, "port": 8765 }` 停止 LAN HTTPS listener。啟用需 Electron 安全儲存與憑證可用，失敗時回報原因；設定會保存在本機並於桌面程式重啟時恢復。 |
+| `POST /api/network/test` | 是 | 手動檢測本機網路介面、loopback／LAN listener 與外網測試端點；只有呼叫此端點時才連線到 Microsoft 連線測試端點，不上傳檔案或查詢公開 IP。 |
+| `GET /api/smb/status` | 是 | 僅管理員；檢查 Windows 產品名稱／組建、`LanmanServer`、TCP 445、`New-SmbShare` 命令及 Nanako 程序提升狀態，並回傳實驗性 SMB 選擇。若系統不支援且曾保存啟用值，會將其清除。不會建立分享、啟停 Windows 服務或修改防火牆；`nanakoSmbReady` 固定為 `false`。 |
+| `POST /api/smb/experimental` | 是 | 僅管理員；JSON `{ "enabled": true|false }` 保存實驗性 SMB 選擇。啟用僅允許產品識別為 Windows 11 且 build ≥ 26100（24H2+）；其他 OS／版本拒絕啟用並保持關閉。這只是持久化功能旗標，尚不會啟動 SMB Server 或 listener。 |
 | `GET /api/system` | 是 | 僅管理員；查看本機電腦名稱、Windows 版本／組建、處理器、記憶體、Nanako 資料磁碟容量、網路介面及目前 Windows 身分、系統管理員群組與程序提升狀態。 |
 | `POST /api/activity` | 是 | 記錄使用者開啟／切換 Nanako 畫面及視窗操作；JSON `{ "view", "action"? }`。`action` 可為 `open`、`focus`、`minimize`、`maximize`、`restore`、`close`、`move`、`preview`；省略時視為 `open`。僅接受已知畫面與操作代碼，管理畫面限管理員。 |
 | `POST /api/archive/create` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，在來源旁建立同名 ZIP。來源、暫存與輸出都限制在 Nanako 資料空間。 |
@@ -88,7 +92,7 @@
 
 ## 操作紀錄
 
-使用者登入／登出、畫面切換、視窗開啟／切換／最小化／最大化／還原／移動／關閉、資料夾瀏覽、分類／相簿／播放清單搜尋、檔案匯入／下載／預覽／重新命名／移動／複製／移至回收桶、還原／永久刪除、使用者管理、SMB 前置狀態檢視、ZIP 壓縮／解壓縮、重複檔案掃描／整理及保留期限變更會記錄在 `NanakoData\data\metadata.sqlite`。批次操作逐項呼叫 API，因此每個成功或失敗的檔案動作分別留有紀錄。搜尋紀錄只保留分類名稱，不記錄使用者輸入的檔名查詢。管理員可查看所有帳號的操作紀錄；一般使用者不能查看、修改保留期限或刪除紀錄。每次開啟本機設定頁最多顯示最近 500 筆。
+使用者登入／登出、畫面切換、視窗開啟／切換／最小化／最大化／還原／移動／關閉、資料夾瀏覽、分類／相簿／播放清單搜尋、檔案匯入／下載／預覽／重新命名／移動／複製／移至回收桶、還原／永久刪除、使用者管理、SMB 前置狀態檢視與實驗性 SMB 設定變更、ZIP 壓縮／解壓縮、重複檔案掃描／整理及保留期限變更會記錄在 `NanakoData\data\metadata.sqlite`。批次操作逐項呼叫 API，因此每個成功或失敗的檔案動作分別留有紀錄。搜尋紀錄只保留分類名稱，不記錄使用者輸入的檔名查詢。管理員可查看所有帳號的操作紀錄；一般使用者不能查看、修改保留期限或刪除紀錄。每次開啟本機設定頁最多顯示最近 500 筆。
 
 紀錄包含時間、使用者、操作、必要的目標名稱／相對路徑與成功／失敗結果；不儲存密碼、工作階段權杖或檔案內容。背景輪詢與影音播放的逐段 HTTP Range 請求不各自重複寫入。系統於啟動、每小時、調整期限及讀取紀錄時清除逾期資料。手動刪除須於 Nanako 防呆視窗輸入「刪除所有紀錄」，伺服器也會再次驗證確認文字；為確實清空，清除動作本身不會留在已刪除的紀錄中。
 

@@ -2,51 +2,47 @@
 
 - 日期：2026-11-06
 - 對象：`paltaio/rust-smb-server` 0.8.0，tag `v0.8.0`／revision `c57fe2c1e58f3bb0882b4e762a89522824d16ccd`
-- 狀態：**已界定驗收方式，尚未完成 Windows 互通驗證，未採用候選引擎**。
+- 狀態：**Windows build 與 Impacket SMB 3.1.1 smoke test 已通過；Windows 原生 client、路徑隔離、鎖定／並行等驗收仍未完成，候選未採用**。
 
 本 slice 只交付一個獨立於 Nanako 產品程式的候選測試 harness、Windows 執行結果與 go/no-go 結論。它以兩個 synthetic NanakoData-style 測試根目錄與兩個 synthetic 使用者驗證協定能力，不建立 Windows SMB 分享。
 
 ## 下一可實作切片與成功定義
 
-1. 固定上述 revision，在 Windows x64、Rust 1.95.0 執行 `cargo test --workspace`，再建置測試 harness。crate tests 通過不等於用戶端互通通過。
-2. harness 只綁定 `127.0.0.1:4445`，不啟用 discovery。以實際 listener 位址證明沒有綁到 LAN；不得為此停止 `LanmanServer`、占用 445 或改防火牆。
-3. 只設兩個 private shares，不沿用上游 example 的匿名／public shares：`alpha` 對 `alice` 可讀寫、對 `bob` 唯讀；`beta` 只對 `alice` 開放。未列使用者與匿名／guest 操作一律失敗。
-4. 以 Windows 原生 SMB client 連到替代連接埠；命令 `net use \\127.0.0.1@4445\alpha ...` 的語法與可用性必須實測，不能因 File Explorer 不支援替代埠就略過。若 Windows client 不支援，此 slice 為 **no-go／退回候選比較**，不以 macOS／Linux 結果替代。
-5. 由協定安全事件／除錯證據記錄每條連線實際交涉的 SMB 2.0.2–3.1.1 dialect、signing、encryption，而非摘錄 API 文件當成實測。至少驗證受控 require-signing 與 SMB3 require-encryption 個案；拒絕不符合要求的匿名／guest。
-6. `alice` 在 `alpha` 完成列列舉、讀、寫、建目錄、改名與刪除；`bob` 寫入被拒；`alice` 可連 `beta`，`bob` 不可連。未知 share、其他使用者的路徑與匿名存取不得因猜中名字而通過。
-7. `..`、絕對路徑、junction／symlink 指向根目錄外的 sentinel 均不可讀寫；根目錄外的 sibling 建立同名項目以辨識洩漏。另測兩個並行 session、byte-range lock／share conflict、中斷後重連，保存實際結果。
-8. 以候選自己的 `shutdown_handle().shutdown()` 正常停止，等 `serve()` 返回及所有 handle 關閉；確認 `127.0.0.1:4445` 不再監聽、既有 session 無法續用。只停止候選測試程序，不操作 Windows 服務。
+1. **完成：** 固定 revision 於 Windows x64 以 TEMP 內 Rust 1.95.0 執行 `cargo test --workspace`，並建置上游 example 與本 harness。crate tests 通過不等於用戶端互通通過。
+2. **完成：** harness 綁定 `127.0.0.1:4445`，不啟用 discovery；實測 listener 僅為 loopback，Ctrl+C 觸發候選 shutdown API 後 listener 消失。未停止 `LanmanServer`、占用 445 或改防火牆。
+3. **完成：** 兩個 private shares：`alpha` 對 `alice` 可讀寫、對 `bob` 唯讀；`beta` 只對 `alice` 開放。無 public／guest share。
+4. **待完成：** 本機 Windows 10 22H2（build 19045）沒有 Microsoft 文件所述替代連接埠 SMB client 選項；試用 `\\127.0.0.1@4445\alpha` 收到 error 53，server 看到非 Direct-TCP 格式，不是可用語法。Microsoft 文件列出的 `New-SmbMapping -TcpPort`／`NET USE /TCPPORT` client 流程需 Windows 11 24H2+ 或 Windows Server 2025+；因此 Windows 原生互通 gate 仍未通過。Impacket 測試只是補充協定 smoke，不取代此 gate。
+5. **部分完成：** Impacket 0.13.1 實測 SMB 3.1.1、session signing 啟用、加密 session flag 啟用；guest／匿名登入失敗。尚未完成拒絕未簽章／未加密用戶端的負向測試。
+6. **完成（Impacket）：** `alice` 在 `alpha` 成功列舉、讀、寫、建目錄、改名與刪除，並可連 `beta`；`bob` 可讀 `alpha`，建立／寫入被拒且 `beta` TREE_CONNECT 被拒；匿名登入被拒。`tools/smb-poc/impacket_smoke.py` 可重跑此測試。Impacket `storeFile` helper 僅請求 `FILE_WRITE_DATA`，不適合驗證 EOF 擴展；smoke 腳本使用 `FILE_WRITE_DATA | FILE_APPEND_DATA`。
+7. **部分完成：** Windows synthetic sibling sentinel 的 junction escape、`..` parent traversal 與絕對 drive path 均在 SMB read 與 CREATE/write 嘗試中被拒。仍未測 symlink、並行 session、byte-range lock／share conflict、中斷後重連。
+8. **部分完成：** Ctrl+C 經候選 `shutdown_handle()` 停止服務，`serve()` 返回且 TCP 4445 不再監聽；尚未測既有連線關閉後重連行為。
 
-全部 1–8 有原始 log 且符合結果才算成功，才可另開「Nanako 授權／憑證整合設計」；任何安全、隔離或 Windows 互通閘門失敗即停止，不補產品 adapter 掩蓋問題。跨小時／跨執行的性能、macOS Finder 與 Linux `smbclient` 是候選通過本 slice 後的後續項目。
+全部 1–8 有原始 log 且符合結果才算成功，才可另開「Nanako 授權／憑證整合設計」。目前協定 smoke 測試已提供候選的正向證據，但 Windows 原生 client 與隔離／併發 gates 未完成，因此仍 **no-go for product integration**；不補產品 adapter 掩蓋問題。跨小時／跨執行的性能、macOS Finder 與 Linux `smbclient` 是候選通過本 slice 後的後續項目。
 
 ## Windows 執行方式
 
-在隔離的測試 checkout（**不是產品依賴**）：
+在隔離的測試 checkout（**不是產品依賴**）使用 Rust 1.95.0。驗證期間將 rustup／Cargo 與 LLVM MinGW 僅放在 `%TEMP%`，PATH 與 LIBRARY_PATH 只對建置程序有效；未修改使用者／系統 PATH 或全域安裝。若已有 Rust toolchain：
 
 ```powershell
 git clone --branch v0.8.0 https://github.com/paltaio/rust-smb-server.git $env:TEMP\rust-smb-server-0.8.0
 git -C $env:TEMP\rust-smb-server-0.8.0 rev-parse HEAD
 # 必須輸出 c57fe2c1e58f3bb0882b4e762a89522824d16ccd
-rustup default 1.95.0
-cargo test --workspace --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.toml
-cargo build -p minimal-smb-example --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.toml
+cargo +1.95.0 test --workspace --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.toml
+cargo +1.95.0 build -p minimal-smb-example --manifest-path $env:TEMP\rust-smb-server-0.8.0\Cargo.toml
 ```
 
-上游 `minimal-smb-example` 可作 build／正常 Ctrl+C 停止 smoke test，其預設 listener 為 `127.0.0.1:4445`；但它有 public／匿名 shares，**不可當作授權驗收 harness**。授權驗收需另建上述 private-share harness（例如明確 `.require_signing(true)`、SMB3 `.encrypt_data(true)`，並保持 `.reject_unencrypted_access(true)`）及 dialect／security 證據；這些是已檢查的 API 選項，尚非 Windows 實測；不得把 harness 產生或載入的密碼寫入 repo／log。若 smoke test 使用上游隨機密碼，原輸出會記錄密碼，僅可留在本次測試主機，交付前遮除或直接删除，不使用真實帳號／密碼。
+上游 `minimal-smb-example` 可作 build smoke test，但它有 public／匿名 shares，**不可當作授權驗收 harness**。本 repo 的 private harness 固定 bind `127.0.0.1:4445`，要求 signing／SMB3 encryption，且會拒絕未加密 access；請使用 `%TEMP%` synthetic 資料與一次性帳號。已通過的 Impacket smoke client 腳本是 `tools/smb-poc/impacket_smoke.py`，不屬產品 runtime。
 
-執行 harness 時以新 console session 的臨時環境輸入一次性 synthetic secret，完成即關閉；設定 `SMB_LISTEN=127.0.0.1:4445`、`SMB_ROOT` 指向 synthetic 測試目錄，且不要設定 `SMB_DISCOVERY`。用 `Get-NetTCPConnection -LocalPort 4445 -State Listen` 保存位址。下方 Windows client 命令是**待驗證測試步驟**，其中的 secret 由當次測試者互動輸入，不貼進命令／腳本／紀錄：
+執行 repo harness 時以新 console session 的臨時環境輸入一次性 synthetic secret，完成即關閉；`SMB_POC_ROOT` 指向 synthetic 測試目錄。用 `Get-NetTCPConnection -LocalPort 4445 -State Listen` 保存位址。Windows 原生 client 替代埠測試待在支援的 OS 版本上執行：Microsoft 文件所列 syntax 為 `New-SmbMapping -TcpPort` 或 `NET USE /TCPPORT`，不是 `\\server@port\share`。不得把密碼貼進命令或紀錄。
 
 ```powershell
-net use \\127.0.0.1@4445\alpha /user:alice *
-# alice：dir / type / copy / mkdir / ren / del；然後中斷、重連
-net use \\127.0.0.1@4445\alpha /delete
-net use \\127.0.0.1@4445\alpha /user:bob *
-# bob：讀取應成功，copy / mkdir / ren / del 應拒絕
-net use \\127.0.0.1@4445\alpha /delete
-# beta 對 bob 必須 TREE_CONNECT 失敗；其餘帳號與匿名也必須失敗
+$credential = Get-Credential -UserName 'alice' -Message 'Synthetic SMB POC account'
+New-SmbMapping -LocalPath 'Z:' -RemotePath '\\127.0.0.1\alpha' -TcpPort 4445 -Credential $credential
+# 驗證完成後移除 mapping。
+Remove-SmbMapping -LocalPath 'Z:' -Force
 ```
 
-每次連線使用獨立 session，避免 Windows 為相同 server 重用另一身分而產生誤判。收集 client 的實際錯誤碼、harness 的協定 security 證據及 listener 前後結果；log 不包含 secret。
+在支援 OS 上需以系統管理員權限執行上述 alternate-port mapping；Windows 10 22H2 無法使用此流程，須改在 Windows 11 24H2+ 或 Windows Server 2025+ 重跑。每次連線使用獨立 session，避免 Windows 為相同 server 重用另一身分而產生誤判。收集 client 的實際錯誤碼、harness 的協定 security 證據及 listener 前後結果；log 不包含 secret。詳細 Microsoft 支援版本與命令：[Configure alternative SMB ports](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-ports)。
 
 ## 與 ADR-0013 的順序
 

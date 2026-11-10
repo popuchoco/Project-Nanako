@@ -266,8 +266,21 @@
       </section>
 
       <section id="view-network" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">目前版本只接受本機連線，不會開放區域網路存取。</p></div></div>
-        <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機模式</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>區域網路分享尚未啟用</strong><p>目前僅能從這台電腦連線；檢測只讀取網路資訊，不會變更 Windows 防火牆或路由器設定。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
+        <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">本機連線預設開啟；管理員可選擇性啟用同一區域網路內的 HTTPS 存取。</p></div></div>
+        <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機服務</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>網頁服務與 SMB 是不同連線</strong><p>本機網址只供這台電腦使用。區域網路 HTTPS 可讓其他裝置登入 Nanako；SMB 目前是實驗性功能，尚未整合伺服器、不會開始監聽或建立 Windows 分享。此處不會修改 Windows 防火牆或路由器。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
+        <section class="card lan-access-card admin-only" aria-labelledby="lan-access-title">
+          <div class="content-heading"><div><h3 id="lan-access-title">區域網路登入</h3><p class="muted">只允許選取的私有 IPv4 網卡，使用 HTTPS；預設關閉，不會開放外網或設定路由器轉送。</p></div></div>
+          <div class="lan-access-controls">
+            <label class="field-inline" for="lan-address">網路介面<select id="lan-address" aria-describedby="lan-address-error"></select><span id="lan-address-error" class="form-error lan-field-error" role="alert" hidden></span></label>
+            <label class="field-inline" for="lan-port">服務連接埠<input id="lan-port" type="number" min="1024" max="65535" value="8765" inputmode="numeric" aria-describedby="lan-port-error"><span id="lan-port-error" class="form-error lan-field-error" role="alert" hidden></span></label>
+            <button id="toggle-lan-access" class="button primary" type="button">啟用區域網路登入</button>
+          </div>
+          <p id="lan-access-status" class="inline-message" role="status" aria-live="polite">區域網路存取目前關閉。</p>
+          <p id="lan-access-url" class="lan-endpoint" hidden></p>
+          <button id="copy-lan-url" class="button secondary" type="button" hidden>複製登入網址</button>
+          <p id="lan-cert-fingerprint" class="muted lan-fingerprint" hidden></p>
+          <div class="notice"><strong>其他裝置登入方式</strong><p>啟用後，讓其他裝置連上同一個 Wi‑Fi／區域網路，使用上方 HTTPS 網址開啟登入頁，再輸入 Nanako 帳號與密碼。首次連線會看到自簽憑證提示；請先比對此頁顯示的 SHA‑256 指紋。若 Windows 防火牆阻擋，需自行允許此程式／連接埠在「私人網路」接收連線。不要將路由器連接埠轉送到網際網路。</p></div>
+        </section>
         <section class="card network-check-card" aria-labelledby="network-check-title">
           <div class="content-heading"><div><h3 id="network-check-title">內網與外網檢測</h3><p class="muted">內網顯示本機介面與 Nanako 監聽位置；外網檢查網際網路連線與延遲。</p></div><button id="network-test-button" class="button secondary" type="button">重新檢測</button></div>
           <p id="network-check-message" class="inline-message" role="status" aria-live="polite">尚未執行檢測。</p>
@@ -277,15 +290,27 @@
           </div>
         </section>
         <section id="smb-preflight" class="card smb-preflight admin-only" aria-labelledby="smb-preflight-title">
-          <div class="content-heading"><div><h3 id="smb-preflight-title">SMB 分享前置檢查</h3><p class="muted">SMB 是 Nanako 的必要功能。這裡先檢查 Windows SMB 元件；目前不會建立分享、變更 Windows 服務或修改防火牆。</p></div></div>
+          <div class="content-heading"><div><h3 id="smb-preflight-title">SMB 實驗性功能</h3><p class="muted">啟用資格限 Windows 11 24H2 以上；其他 Windows 版本會預設關閉且無法勾選。</p></div></div>
+          <div class="smb-experimental-setting">
+            <label class="smb-experimental-toggle" for="smb-experimental-enabled">
+              <input id="smb-experimental-enabled" type="checkbox" disabled aria-describedby="smb-experimental-note smb-experimental-message">
+              <span><strong>啟用實驗性 SMB</strong><small id="smb-experimental-note">正在檢查 Windows 版本…</small></span>
+            </label>
+            <p id="smb-experimental-message" class="inline-message" role="status" aria-live="polite">正在檢查此電腦是否符合啟用條件。</p>
+          </div>
+          <p class="muted smb-experimental-disclaimer">此開關只保存實驗性功能選擇；Nanako SMB 伺服器尚未整合，因此不會開始監聽、建立分享、變更 Windows 服務或修改防火牆。</p>
+          <details class="smb-preflight-details">
+            <summary>Windows SMB 元件狀態</summary>
           <dl class="smb-status-grid">
+            <dt>Windows 版本</dt><dd id="smb-os-version">讀取中…</dd>
             <dt>Windows SMB Server 服務</dt><dd id="smb-server-service">讀取中…</dd>
             <dt>標準連接埠 TCP 445</dt><dd id="smb-port-status">讀取中…</dd>
             <dt>SMB 分享管理命令</dt><dd id="smb-command-status">讀取中…</dd>
             <dt>目前程序是否已提升</dt><dd id="smb-elevation-status">讀取中…</dd>
-            <dt>Nanako SMB 分享</dt><dd id="nanako-smb-status">尚未實作</dd>
+            <dt>Nanako SMB 分享服務</dt><dd id="nanako-smb-status">尚未整合</dd>
           </dl>
           <p id="smb-preflight-message" class="inline-message" role="status" hidden></p>
+          </details>
         </section>
       </section>
       </div>

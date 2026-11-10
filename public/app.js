@@ -1967,9 +1967,89 @@ async function loadNetwork() {
       row.append(name, address); list.append(row);
     }
     if (!result.interfaces.length) list.textContent = '目前沒有可用的網路介面卡。';
+    const lanSelect = $('#lan-address');
+    if (lanSelect) {
+      const previousAddress = result.lan?.address || lanSelect.value;
+      lanSelect.replaceChildren();
+      const lanCandidates = result.interfaces.filter((item) => item.family === 'IPv4' && item.private);
+      for (const item of lanCandidates) {
+        const option = document.createElement('option');
+        option.value = item.address;
+        option.textContent = `${item.name} · ${item.address}`;
+        lanSelect.append(option);
+      }
+      if (!lanCandidates.length) {
+        const option = document.createElement('option'); option.value = ''; option.textContent = '沒有可用的私有 IPv4 網卡'; lanSelect.append(option);
+      }
+      lanSelect.value = lanCandidates.some((item) => item.address === previousAddress) ? previousAddress : lanCandidates[0]?.address || '';
+      $('#lan-port').value = String(result.lan?.port || 8765);
+      const enabled = Boolean(result.lan?.listening);
+      const toggle = $('#toggle-lan-access');
+      toggle.dataset.enabled = String(enabled);
+      toggle.textContent = enabled ? '停用區域網路登入' : '啟用區域網路登入';
+      toggle.classList.toggle('danger', enabled);
+      toggle.classList.toggle('primary', !enabled);
+      $('#lan-address').disabled = enabled;
+      $('#lan-port').disabled = enabled;
+      validateLanSettings();
+      const status = $('#lan-access-status');
+      status.classList.toggle('error', Boolean(result.lan?.error));
+      status.textContent = result.lan?.error || (enabled
+        ? '區域網路 HTTPS 已啟用；連線只接受此網卡所在的私人子網路。'
+        : '區域網路存取目前關閉。');
+      const endpoint = $('#lan-access-url');
+      endpoint.hidden = !enabled;
+      endpoint.textContent = enabled ? result.lan.url : '';
+      const copyUrl = $('#copy-lan-url'); copyUrl.hidden = !enabled;
+      const fingerprint = $('#lan-cert-fingerprint');
+      fingerprint.hidden = !enabled;
+      fingerprint.textContent = enabled ? `TLS 憑證 SHA‑256 指紋：${result.lan.tlsFingerprint || '讀取中'}` : '';
+    }
     if (state.user.role === 'admin') await loadSmbStatus();
   }
   catch (error) { notify(error.message, true); }
+}
+
+function validateLanSettings() {
+  const address = $('#lan-address');
+  const port = $('#lan-port');
+  const addressError = $('#lan-address-error');
+  const portError = $('#lan-port-error');
+  const validAddress = Boolean(address.value);
+  const validPort = Number.isInteger(port.valueAsNumber) && port.valueAsNumber >= 1024 && port.valueAsNumber <= 65535;
+  address.setAttribute('aria-invalid', String(!validAddress));
+  port.setAttribute('aria-invalid', String(!validPort));
+  addressError.hidden = validAddress;
+  addressError.textContent = validAddress ? '' : '請選擇目前連線中的私有 IPv4 網卡。';
+  portError.hidden = validPort;
+  portError.textContent = validPort ? '' : '連接埠須為 1024–65535 的整數。';
+  const button = $('#toggle-lan-access');
+  button.disabled = button.dataset.busy === 'true' || (button.dataset.enabled !== 'true' && !validAddress);
+  return validAddress && validPort;
+}
+
+async function toggleLanAccess() {
+  const button = $('#toggle-lan-access');
+  const enabled = button.dataset.enabled !== 'true';
+  if (enabled && !validateLanSettings()) {
+    ($('#lan-address').value ? $('#lan-port') : $('#lan-address')).focus();
+    return;
+  }
+  button.disabled = true;
+  button.dataset.busy = 'true';
+  $('#lan-access-status').textContent = enabled ? '正在安全啟動區域網路服務…' : '正在關閉區域網路服務…';
+  try {
+    const settings = enabled
+      ? { enabled: true, address: $('#lan-address').value, port: Number($('#lan-port').value) }
+      : { enabled: false, port: Number($('#lan-port').value) };
+    const result = await api('/api/network/lan', { method: 'POST', body: JSON.stringify(settings) });
+    await loadNetwork();
+    notify(result.lan.listening ? `區域網路登入已啟用：${result.lan.url}` : '區域網路登入已關閉。');
+  } catch (error) {
+    $('#lan-access-status').textContent = `無法變更區域網路設定：${error.message}`;
+    $('#lan-access-status').classList.add('error');
+    await loadNetwork();
+  } finally { button.dataset.busy = 'false'; validateLanSettings(); }
 }
 
 async function runNetworkCheck() {
@@ -1980,7 +2060,9 @@ async function runNetworkCheck() {
     const result = await api('/api/network/test', { method: 'POST', body: JSON.stringify({}) });
     const internal = result.internal;
     $('#network-check-internal').textContent = internal.status === 'available'
-      ? `本機連線正常 · Nanako 僅監聽 ${internal.host}:${internal.port}（不對區域網路開放）`
+      ? (internal.lan?.listening
+        ? `本機連線正常 · 區域網路登入 ${internal.lan.url}`
+        : `本機連線正常 · Nanako 僅監聽 ${internal.host}:${internal.port}（區域網路登入關閉）`)
       : '沒有偵測到可用的網路介面。';
     const interfaces = $('#network-check-interfaces'); interfaces.replaceChildren();
     for (const item of internal.interfaces) {
@@ -2006,17 +2088,24 @@ async function runNetworkCheck() {
 
 async function loadSmbStatus() {
   const fields = {
-    service: $('#smb-server-service'), port: $('#smb-port-status'), command: $('#smb-command-status'), elevation: $('#smb-elevation-status'),
+    osVersion: $('#smb-os-version'), service: $('#smb-server-service'), port: $('#smb-port-status'), command: $('#smb-command-status'), elevation: $('#smb-elevation-status'),
   };
   const message = $('#smb-preflight-message');
   message.hidden = true;
   try {
     const status = await api('/api/smb/status');
+    const version = status.windowsVersion || {};
+    const versionText = version.currentBuild
+      ? `${version.productName || 'Windows'} ${version.displayVersion || ''} (Build ${version.currentBuild})`.trim()
+      : version.productName || '無法判定';
+    fields.osVersion.textContent = versionText;
+    renderSmbExperimentalStatus(status.experimentalSmb, version);
     if (!status.supported) {
       fields.service.textContent = '不支援此作業系統';
       fields.port.textContent = '不適用';
       fields.command.textContent = '不適用';
       fields.elevation.textContent = '無法判定';
+      $('#nanako-smb-status').textContent = '目前作業系統不支援';
       message.textContent = status.message || 'SMB 前置檢查僅支援 Windows。'; message.hidden = false;
       return;
     }
@@ -2025,6 +2114,7 @@ async function loadSmbStatus() {
       fields.port.textContent = '無法判定';
       fields.command.textContent = '無法判定';
       fields.elevation.textContent = status.processElevated === null ? '無法判定' : status.processElevated ? '已提升' : '未提升';
+      $('#nanako-smb-status').textContent = '伺服器尚未整合';
       message.textContent = status.message || '無法讀取 Windows SMB 伺服器狀態。'; message.hidden = false;
       return;
     }
@@ -2033,9 +2123,61 @@ async function loadSmbStatus() {
     fields.port.textContent = status.port445Listening ? '使用中（Nanako 尚未監聽）' : '目前未使用';
     fields.command.textContent = status.shareManagementAvailable ? '可用' : '不可用';
     fields.elevation.textContent = status.processElevated === null ? '無法判定' : status.processElevated ? '已提升' : '未提升';
+    $('#nanako-smb-status').textContent = status.experimentalSmb?.enabled
+      ? '尚未整合（實驗性選項已開啟）'
+      : status.experimentalSmb?.supportedOs ? '尚未整合（實驗性選項關閉）' : '目前 Windows 版本不支援';
   } catch (error) {
     for (const field of Object.values(fields)) field.textContent = '讀取失敗';
+    $('#smb-experimental-enabled').checked = false;
+    $('#smb-experimental-enabled').disabled = true;
+    $('#smb-experimental-note').textContent = '無法確認 Windows 版本，因此保持關閉。';
+    $('#smb-experimental-message').textContent = '無法驗證啟用資格，實驗性 SMB 已鎖定為關閉。';
+    $('#nanako-smb-status').textContent = '無法判定';
     message.textContent = error.message; message.hidden = false;
+  }
+}
+
+function renderSmbExperimentalStatus(experimental = {}, version = {}) {
+  const checkbox = $('#smb-experimental-enabled');
+  const note = $('#smb-experimental-note');
+  const message = $('#smb-experimental-message');
+  const supported = experimental.supportedOs === true;
+  checkbox.dataset.supported = String(supported);
+  checkbox.checked = supported && experimental.enabled === true;
+  checkbox.disabled = !supported;
+  message.classList.remove('error');
+  if (!supported) {
+    const detectedVersion = version.currentBuild
+      ? `${version.productName || '此 Windows'} ${version.displayVersion || ''} (Build ${version.currentBuild})`.trim()
+      : version.productName || '無法判定的系統版本';
+    note.textContent = `僅限 Windows 11 24H2 以上；目前：${detectedVersion}`;
+    message.textContent = '此系統不符合條件，開關保持未勾選且無法啟用。';
+    return;
+  }
+  note.textContent = '此電腦符合 Windows 11 24H2 以上的實驗性功能資格。';
+  message.textContent = experimental.enabled
+    ? '實驗性功能選擇已保存；SMB 伺服器尚未整合，目前不會開始監聽。'
+    : '實驗性功能預設關閉；勾選後只保存選擇，不會啟動 SMB 伺服器。';
+}
+
+async function toggleExperimentalSmb(event) {
+  const checkbox = event.currentTarget;
+  const requestedEnabled = checkbox.checked;
+  checkbox.disabled = true;
+  $('#smb-experimental-message').textContent = '正在保存實驗性 SMB 設定…';
+  try {
+    const result = await api('/api/smb/experimental', {
+      method: 'POST', body: JSON.stringify({ enabled: requestedEnabled }),
+    });
+    renderSmbExperimentalStatus(result.experimentalSmb, { productName: 'Windows 11 24H2+' });
+    $('#nanako-smb-status').textContent = result.experimentalSmb.enabled
+      ? '尚未整合（實驗性選項已開啟）'
+      : '尚未整合（實驗性選項關閉）';
+  } catch (error) {
+    checkbox.checked = !requestedEnabled;
+    checkbox.disabled = checkbox.dataset.supported !== 'true';
+    $('#smb-experimental-message').textContent = error.message;
+    $('#smb-experimental-message').classList.add('error');
   }
 }
 
@@ -2522,6 +2664,16 @@ $('#media-test-track').addEventListener('change', () => {
 $('#media-test-run').addEventListener('click', testSelectedMedia);
 $('#refresh-system').addEventListener('click', loadSystem);
 $('#network-test-button').addEventListener('click', runNetworkCheck);
+$('#toggle-lan-access').addEventListener('click', toggleLanAccess);
+$('#smb-experimental-enabled').addEventListener('change', toggleExperimentalSmb);
+$('#lan-address').addEventListener('change', validateLanSettings);
+$('#lan-address').addEventListener('blur', validateLanSettings);
+$('#lan-port').addEventListener('input', validateLanSettings);
+$('#lan-port').addEventListener('blur', validateLanSettings);
+$('#copy-lan-url').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#lan-access-url').textContent); notify('已複製區域網路登入網址。'); }
+  catch { notify('無法複製網址，請手動選取並複製。', true); }
+});
 $('#refresh-tasks').addEventListener('click', loadTasks);
 $('#audit-settings-form').addEventListener('submit', saveAuditSettings);
 $('#refresh-audit-logs').addEventListener('click', loadAuditLogs);

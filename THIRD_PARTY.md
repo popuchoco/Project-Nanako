@@ -9,9 +9,10 @@
 | [Electron](https://github.com/electron/electron) | 45.2.2 | 桌面視窗、Chromium renderer 與 Node.js 主程序；本專案以 Electron 為基礎的延伸作品 | MIT；請以對應版本的 `LICENSE` 與正式發行套件所附授權檔為準 | `package.json` 已列為開發相依套件；桌面封裝設定使用 Electron 執行期，發行時會隨桌面程式提供 |
 | [electron-builder](https://github.com/electron-userland/electron-builder) | 26.18.0（直接相依宣告 `^26.18.0`） | 建置 Windows x64 可攜式執行檔 | MIT | 僅開發／建置依賴；不作為應用程式執行期功能套件，Electron 會隨發行檔提供 |
 | [zip.js](https://github.com/gildas-lormeau/zip.js/)（`@zip.js/zip.js`） | 2.24.0 | NanakoData 內 ZIP 串流建立與解壓縮；採 ZIP64、限制項目數與展開大小，解壓縮前檢查路徑與 CRC | BSD-3-Clause；[版本套件資訊](https://github.com/gildas-lormeau/zip.js/blob/master/package.json) | `package.json` 執行期相依套件；Electron 發行檔會隨應用程式封裝 |
+| [selfsigned](https://github.com/jfromaniello/selfsigned) | 5.5.0 | 建立區域網路 HTTPS 原型的 IP-SAN TLS 憑證；私鑰另以 Electron `safeStorage`／Windows DPAPI 加密保存 | MIT；[npm 套件資訊](https://www.npmjs.com/package/selfsigned) | `package.json` 執行期相依套件；Electron 發行檔會隨應用程式封裝 |
 | [Node.js](https://github.com/nodejs/node) | 需 Node.js 22.13 以上；Electron 內含其執行期 | 使用 `node:http`、`node:fs`、`node:sqlite`、`node:crypto` 等內建模組 | Node.js 專案授權採多重授權；以實際發行檔所附授權為準 | 開發測試使用本機 Node.js；Electron 發行檔會含其 Node.js 執行期及相依元件 |
 
-UI 使用原生 HTML、CSS 與 JavaScript，伺服器功能以 Node.js 內建模組為主，ZIP 為目前唯一額外 npm 執行期套件。npm lockfile 已納入；正式發行前仍需依實際建置產出並審查 SBOM 與 Electron 隨附相依元件的授權清單。
+UI 使用原生 HTML、CSS 與 JavaScript，ZIP 與 HTTPS 憑證原型使用額外 npm 執行期套件。npm lockfile 已納入；正式發行前仍需依實際建置產出並審查 SBOM 與 Electron 隨附相依元件的授權清單。
 
 ## 尚未採用的候選專案與決策
 

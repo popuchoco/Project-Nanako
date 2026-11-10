@@ -6,7 +6,7 @@
 
 Project Nanako 是基於 Electron 的 Windows 桌面延伸作品，提供軟體式、本機優先的檔案管理服務。此版本先完成桌面 UI、帳號／權限、檔案基本操作與本機 API 的垂直切片；不依賴專用硬體或雲端帳號。
 
-目前 HTTP 服務僅可從本機迴圈介面連線。程式會列出網路介面與 IP 作為診斷資訊，但不會綁定網卡、不會開啟防火牆，也不會提供區域網路檔案傳輸。此限制是刻意的原型邊界，不能視為已完成網路共享需求。檔案管理根目錄固定在該發行模式的 `NanakoData\data`；檔案管理、相簿、播放器與資源回收桶皆共用該受限範圍，不提供 Windows 磁碟瀏覽、Known Folder 選擇或外部資料夾掛載功能。
+服務預設僅透過 HTTP 綁定本機迴圈介面。Electron 桌面版可由 Nanako 管理員選擇性啟用第二個 HTTPS listener：只綁定一張已連線的私有 IPv4 網卡，限制到該子網路，使用可驗證 IP SAN 的自簽憑證；私鑰由 Electron `safeStorage`／Windows DPAPI 加密保存。其他裝置登入後會使用同一 Nanako 網頁介面與檔案 API，依權限上傳／下載及管理檔案；這是 HTTPS 網頁存取，不等同 SMB 檔案總管分享。LAN 功能不自動變更 Windows 防火牆或路由器設定，仍待實際多裝置／防火牆組合驗收；命令列模式仍只支援迴圈介面。檔案管理根目錄固定在該發行模式的 `NanakoData\data`；檔案管理、相簿、播放器與資源回收桶皆共用該受限範圍，不提供 Windows 磁碟瀏覽、Known Folder 選擇或外部資料夾掛載功能。
 
 ## 元件
 
@@ -80,7 +80,7 @@ ZIP 只處理一般 Nanako 檔案並以串流方式建立／解壓，進出路�
 
 ## 網路與 API 演進
 
-目前 API 與 UI 同源，只供本機用戶端使用；`GET /api/network` 只回報目前服務位址、連接埠及介面清單，並非網路設定功能。網路介面選擇、區域網路共享及 SMB 尚未實作，但 SMB 是產品必要功能。SMB 管理 UI 可參考 SMB 檔案用戶端的檔案操作流程及 Samba 管理介面的服務／分享／帳號狀態呈現；該用戶端不是 SMB Server，Linux Samba 管理流程也不能直接套用 Windows。服務端技術選擇及帳號映射需先完成概念驗證，依 [ADR-0015](decisions/ADR-0015-smb-sharing.md) 與 [SMB 實作規劃](smb-implementation-plan.md) 推進。後續要開放區域網路時，需另行設計並測試：
+本機 API 與 Electron UI 同源。桌面版由管理員可透過 `POST /api/network/lan` 啟停 LAN HTTPS listener；`GET /api/network` 回報本機與 LAN listener 狀態。使用者憑證、Host、Origin、所選介面與同子網路來源均由服務端驗證；TLS 1.2 以上。LAN 網頁登入後會使用既有檔案 API 完成有權限檢查的上傳／下載。外部裝置需處理自簽憑證信任，Windows 防火牆仍由使用者管理。SMB Server 及 SMB 檔案總管分享尚未實作，但 SMB 是產品必要功能；SMB 實驗性開關只記錄選擇，不會啟動協定服務。共用授權政策現已明確分類 SMB 檔案操作並對未知命令拒絕，仍須先完成 `paltaio/rust-smb-server` Windows localhost／用戶端 POC、安全簽章／加密、逐帳號認證與根目錄隔離，才能進入服務整合；依 [ADR-0015](decisions/ADR-0015-smb-sharing.md) 與 [SMB 實作規劃](smb-implementation-plan.md) 推進。
 
 1. 由使用者明確選取介面／IP、連接埠與是否啟用，預設維持關閉。
 2. 避免任意 host、DNS rebinding、跨來源請求及 CSRF；明確驗證 Host、Origin 與授權。

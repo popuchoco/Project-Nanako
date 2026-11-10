@@ -1,5 +1,12 @@
 # 版本紀錄
 
+## 0.3.0-rc.4 — 2026-11-10
+
+- 新增預設關閉的區域網路 HTTPS 網頁登入原型：管理員可選私有 IPv4 網卡／服務連接埠，伺服器端限制來源子網路並驗證 Host／Origin；登入 Cookie 僅在 TLS listener 加上 `Secure`。其他裝置登入後可透過 Nanako 網頁介面上傳、下載及管理已授權檔案。這是 HTTPS 網頁檔案存取，不是 SMB；TLS 私鑰由 Electron `safeStorage`（Windows DPAPI）加密保存，不自動修改防火牆或路由器。跨裝置與防火牆環境仍待實際驗收。
+- SMB 工作延伸共用權限政策：新增 SMB 檔案操作分類到 Nanako 每分享讀寫權限的 fail-closed 映射。新增預設關閉的 SMB 實驗性選擇，僅 Windows 11 24H2+ 可由管理員勾選；舊版、非 Windows 與無法判定版本時禁用，伺服器端再次驗證。此旗標只保存使用者選擇，不會啟動 SMB listener 或建立分享；SMB Server 尚未整合，與 LAN 網頁上傳／下載為不同功能。
+- 新增 `selfsigned` 5.5.0，用於產生 IP-SAN TLS 憑證；新增 LAN 網路限制、私鑰加密保存及 HTTPS listener 整合測試。
+- 驗證：本機 `npm test` 114 項通過；Windows x64 可攜式版、NSIS 安裝版及封裝後煙霧測試由 GitHub Actions 發行流程執行。
+
 ## 0.3.0-rc.3 — 2026-11-09
 
 - 桌面捷徑加入延遲 hover intent 與輕量抬升動畫，快速掠過圖示不會立即出現選取底色；鍵盤 focus 仍會即時提示，點擊維持原本的開啟行為，並支援減少動態效果設定。

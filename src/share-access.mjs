@@ -1,5 +1,12 @@
 const READ_OPERATIONS = new Set(['list', 'read', 'download', 'preview']);
 const WRITE_OPERATIONS = new Set(['create', 'write', 'delete', 'rename', 'move', 'copy', 'restore', 'extract']);
+const SMB_OPERATION_CLASS = new Map([
+  ['query-directory', 'list'], ['read-data', 'read'], ['read-attributes', 'read'],
+  ['create-file', 'create'], ['create-directory', 'create'], ['write-data', 'write'],
+  ['set-length', 'write'], ['set-attributes', 'write'], ['delete-file', 'delete'],
+  ['delete-directory', 'delete'], ['rename', 'rename'], ['move', 'move'],
+  ['copy', 'copy'],
+]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function isActive(user) {
@@ -34,7 +41,8 @@ export function evaluateSmbShareAccess({ user, share, permission, operation }) {
   if (!share || !UUID_PATTERN.test(share.id || '') || share.source_type !== 'managed' || share.storage_path != null) {
     return { allowed: false, reason: 'share_out_of_scope' };
   }
-  if (!isShareOperationAllowed(user, permission, operation)) {
+  const normalizedOperation = SMB_OPERATION_CLASS.get(operation) || operation;
+  if (!isShareOperationAllowed(user, permission, normalizedOperation)) {
     return { allowed: false, reason: 'permission_denied' };
   }
   return {

@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Menu, nativeImage, Tray } from 'electron';
+import { app, BrowserWindow, Menu, nativeImage, safeStorage, Tray } from 'electron';
 import { lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { startServer } from '../src/server.mjs';
+import { createLanCertificateProvider } from './lan-certificate-store.mjs';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR
@@ -44,6 +45,10 @@ let windowRef;
 let trayRef;
 let windowCreation;
 let closing = false;
+const lanCertificateProvider = createLanCertificateProvider({
+  filename: path.join(app.getPath('userData'), 'lan-certificate.json'),
+  safeStorage,
+});
 
 const smokeTest = process.env.NANAKO_DESKTOP_SMOKE_TEST === '1';
 
@@ -90,6 +95,7 @@ async function createWindowInstance() {
     storageRoot: appDataDirectory,
     host: '127.0.0.1',
     port: 0,
+    lanCertificateProvider,
   });
   windowRef = new BrowserWindow({
     width: 1280,
