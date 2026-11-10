@@ -72,6 +72,10 @@ test('renderer ES modules are served with a JavaScript MIME type', async (t) => 
   assert.equal(moduleFile.response.status, 200);
   assert.match(moduleFile.response.headers.get('content-type'), /^text\/javascript\b/u);
   assert.match(moduleFile.body, /filterAndSortFiles/u);
+  const clientMode = await request('/client-mode.mjs');
+  assert.equal(clientMode.response.status, 200);
+  assert.match(clientMode.response.headers.get('content-type'), /^text\/javascript\b/u);
+  assert.match(clientMode.body, /isLanMobileClient/u);
 });
 
 test('requests require a loopback peer, bound Host, and allowed Origin for mutations', async (t) => {

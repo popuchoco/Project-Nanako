@@ -1,4 +1,5 @@
 import { filterAndSortFiles, mediaKind } from './file-listing.mjs';
+import { isLanMobileClient } from './client-mode.mjs';
 import {
   formatPlaybackTime,
   shouldResumePlayback,
@@ -90,6 +91,14 @@ function showAppPrompt(message, options = {}) {
 if (navigator.userAgent.includes('Electron/') && navigator.userAgent.includes('Windows NT')) {
   document.documentElement.classList.add('electron-windows-titlebar');
 }
+const isMobileLanClient = isLanMobileClient({
+  protocol: location.protocol,
+  hostname: location.hostname,
+  userAgent: navigator.userAgent,
+  userAgentDataMobile: navigator.userAgentData?.mobile,
+  touchPoints: navigator.maxTouchPoints,
+});
+if (isMobileLanClient) document.documentElement.classList.add('lan-mobile-client');
 const state = {
   user: null, shares: [], shareId: '', path: '', albumPath: '', playerPath: '', albumScopeAll: true, playerScopeAll: true,
   albumSearch: '', playerSearch: '', albumLoadSequence: 0, playerLoadSequence: 0, albumSearchTimer: null, playerSearchTimer: null, view: null,
@@ -392,6 +401,9 @@ function renderWindowSwitchers() {
       container.append(button);
     }
   }
+  document.querySelectorAll('#mobile-client-nav [data-open-view]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.openView === state.view));
+  });
   if (focusedView && focusedContainer) $(`#${focusedContainer} [data-window-view="${focusedView}"]`)?.focus({ preventScroll: true });
 }
 
@@ -541,6 +553,7 @@ function toggleLauncherMenu(force) {
   if (open) closeAccountMenu();
   menu.hidden = !open;
   button.setAttribute('aria-expanded', String(open));
+  $('#mobile-more-button')?.setAttribute('aria-expanded', String(open));
 }
 
 function closeLauncherMenu() { toggleLauncherMenu(false); }
@@ -726,6 +739,7 @@ function initializeDesktopInteractions() {
   });
   $('#launcher-toggle').addEventListener('click', () => toggleLauncherMenu());
   $('#dock-launcher').addEventListener('click', () => toggleLauncherMenu());
+  $('#mobile-more-button').addEventListener('click', () => toggleLauncherMenu());
   $('#desktop-account').addEventListener('click', () => toggleAccountMenu());
   $('#desktop-area').addEventListener('pointerdown', (event) => {
     if (event.target === event.currentTarget) closeLauncherMenu();
@@ -733,7 +747,7 @@ function initializeDesktopInteractions() {
   document.addEventListener('pointerdown', (event) => {
     const target = event.target;
     if (!(target instanceof Node)) return;
-    const launcherButtons = [$('#launcher-toggle'), $('#dock-launcher')];
+    const launcherButtons = [$('#launcher-toggle'), $('#dock-launcher'), $('#mobile-more-button')];
     if (!$('#launcher-menu').contains(target) && !launcherButtons.some((button) => button.contains(target))) closeLauncherMenu();
     if (!$('#account-menu').contains(target) && !$('#desktop-account').contains(target)) closeAccountMenu();
   });

@@ -374,3 +374,96 @@
 .user-badges .user-edit-name-button,.user-badges .user-reset-password-button{min-height:28px;padding:0 8px;font-size:10px}
 @media(max-width:620px){.user-self-settings{align-items:stretch;flex-direction:column}.user-self-actions{justify-content:flex-start}}
 .smb-experimental-setting{border:1px solid #dce6e8;border-radius:8px;padding:13px 14px;background:#fbfdfd}.smb-experimental-toggle{display:flex;align-items:flex-start;gap:10px;cursor:pointer}.smb-experimental-toggle input{width:18px;height:18px;flex:none;margin:1px 0 0;accent-color:var(--accent)}.smb-experimental-toggle input:disabled{cursor:not-allowed;opacity:.55}.smb-experimental-toggle span{display:grid;gap:4px}.smb-experimental-toggle strong{font-size:13px;color:#2f464d}.smb-experimental-toggle small,.smb-experimental-disclaimer{font-size:11px;line-height:1.55;color:#73838a}.smb-experimental-setting .inline-message{margin:10px 0 0;font-size:12px}.smb-experimental-disclaimer{margin:10px 2px 12px}.smb-preflight-details{border-top:1px solid #e7edef;padding-top:10px}.smb-preflight-details summary{cursor:pointer;color:#536970;font-size:12px;font-weight:600}.smb-preflight-details[open] .smb-status-grid{margin-top:13px}
+
+/* LAN mobile layout is explicitly enabled for secure, non-loopback mobile clients only. */
+.lan-mobile-nav{display:none}
+html.lan-mobile-client,html.lan-mobile-client body{min-width:320px;min-height:100vh;min-height:100dvh;background:#f2f5f7;color:#20323c}
+html.lan-mobile-client body{height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
+html.lan-mobile-client .auth-screen{min-height:100vh;min-height:100dvh;display:grid;align-content:center;justify-items:center;padding:22px 16px;background:linear-gradient(145deg,#eaf1f4,#dce8ed)}
+html.lan-mobile-client .auth-titlebar{display:none}
+html.lan-mobile-client .auth-panel{width:min(100%,440px);margin:0;padding:clamp(22px,7vw,34px);border:1px solid #e1e9ec;border-radius:16px;background:#fff;box-shadow:0 18px 48px rgba(28,59,74,.12)}
+html.lan-mobile-client .auth-panel h1{font-size:24px;line-height:1.35}
+html.lan-mobile-client .auth-panel input{min-height:48px;font-size:16px}
+html.lan-mobile-client .auth-panel .button{min-height:48px;width:100%;font-size:14px}
+html.lan-mobile-client .desktop-shell.app-shell{width:100%;height:100vh;height:100dvh;min-height:0;overflow:hidden;background:#f2f5f7;color:#20323c}
+html.lan-mobile-client .system-bar{height:52px;flex:none;padding:0 10px;background:#0f4568;box-shadow:0 1px 0 rgba(255,255,255,.15)}
+html.lan-mobile-client #launcher-toggle,html.lan-mobile-client .system-bar-divider,html.lan-mobile-client #taskbar-windows,html.lan-mobile-client .system-local-status,html.lan-mobile-client .desktop-clock,html.lan-mobile-client #desktop-settings{display:none!important}
+html.lan-mobile-client .brand-home{height:42px;justify-content:flex-start;padding:0 5px}
+html.lan-mobile-client .system-bar-label{font-size:13px}
+html.lan-mobile-client .system-bar-end{margin-left:auto}
+html.lan-mobile-client .account-chip{max-width:min(56vw,210px);height:40px;padding-inline:8px;font-size:12px}
+html.lan-mobile-client .account-chip .account-name{max-width:calc(56vw - 72px);font-size:12px}
+html.lan-mobile-client .account-avatar{width:26px;height:26px;font-size:11px}
+html.lan-mobile-client .account-menu{position:fixed;top:calc(58px + env(safe-area-inset-top,0px));right:10px;width:min(340px,calc(100vw - 20px));max-height:calc(100dvh - 82px);padding:14px}
+html.lan-mobile-client .account-menu-item{min-height:44px;font-size:13px}
+html.lan-mobile-client .desktop-area{flex:1;min-height:0;background:#f2f5f7;isolation:isolate}
+html.lan-mobile-client .desktop-area::before,html.lan-mobile-client .desktop-area::after,html.lan-mobile-client .desktop-shortcuts,html.lan-mobile-client .desktop-status-widget,html.lan-mobile-client .desktop-dock{display:none!important}
+html.lan-mobile-client .window-layer{position:absolute;inset:0;pointer-events:none}
+html.lan-mobile-client .window-layer>.app-window{left:0!important;top:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;border:0;border-radius:0;background:#fff;box-shadow:none;transition:none}
+html.lan-mobile-client .app-window:not(.is-active){visibility:hidden;pointer-events:none}
+html.lan-mobile-client .app-window.is-active{border:0;box-shadow:none}
+html.lan-mobile-client .window-titlebar{height:48px;min-height:48px;justify-content:flex-start;padding:0 16px;border-bottom:1px solid #e7edef;background:#f7f9fa;color:#2b414c;cursor:default}
+html.lan-mobile-client .window-controls{display:none}
+html.lan-mobile-client .window-app-body{height:calc(100% - 48px);display:block;border:0;overflow:hidden}
+html.lan-mobile-client .app-window .workspace{height:100%;padding:14px 14px calc(18px + env(safe-area-inset-bottom,0px));overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+html.lan-mobile-client .app-window.file-manager-window .workspace{padding:0}
+html.lan-mobile-client .app-window .topbar{align-items:flex-start;gap:10px;margin-bottom:14px;padding-bottom:12px}
+html.lan-mobile-client .app-window .topbar h1{font-size:18px}
+html.lan-mobile-client .app-window .topbar .eyebrow{display:none}
+html.lan-mobile-client .app-window .content-heading{align-items:flex-start;flex-direction:column;gap:8px}
+html.lan-mobile-client .app-window .content-heading h2{font-size:17px}
+html.lan-mobile-client .app-window .content-heading .muted{font-size:12px;line-height:1.65}
+html.lan-mobile-client .app-window .toolbar{width:100%;flex-wrap:wrap;gap:8px}
+html.lan-mobile-client .app-window .toolbar .button{flex:1 1 120px;min-height:44px;font-size:13px}
+html.lan-mobile-client .app-window .button{min-height:44px;padding:0 13px;font-size:13px}
+html.lan-mobile-client .app-window input:not([type=checkbox]):not([type=radio]),html.lan-mobile-client .app-window select,html.lan-mobile-client .confirm-dialog input{min-height:44px;font-size:16px}
+html.lan-mobile-client .app-window .sidebar{display:none}
+html.lan-mobile-client .app-window .table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+html.lan-mobile-client .file-manager-view{display:flex;min-height:100%;flex-direction:column}
+html.lan-mobile-client .file-manager-sidebar{flex-direction:row;align-items:flex-start;gap:7px;padding:8px;overflow-x:auto;border-right:0;border-bottom:1px solid #e4eaf0;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+html.lan-mobile-client .file-nav-group{display:flex;align-items:center;gap:4px;flex:none}
+html.lan-mobile-client .file-nav-group h3{display:none}
+html.lan-mobile-client .file-nav-item{width:auto;min-height:42px;padding:7px 10px;white-space:nowrap;font-size:12px}
+html.lan-mobile-client .file-nav-item>span{width:auto}
+html.lan-mobile-client .file-manager-content{min-width:0;padding:14px}
+html.lan-mobile-client .file-manager-content .content-heading{align-items:stretch}
+html.lan-mobile-client .file-manager-content .content-heading .muted{font-size:10px}
+html.lan-mobile-client .file-manager-content .file-controls{align-items:stretch;flex-direction:column;gap:9px}
+html.lan-mobile-client .file-manager-content .field-inline,html.lan-mobile-client .file-manager-content .file-search,html.lan-mobile-client .file-manager-content .file-sort{width:100%;min-width:0}
+html.lan-mobile-client .file-manager-content .field-inline select,html.lan-mobile-client .file-manager-content .file-search input,html.lan-mobile-client .file-manager-content .file-sort select{width:100%;min-width:0;height:46px;font-size:16px}
+html.lan-mobile-client .file-manager-content .breadcrumb{max-width:100%;overflow-x:auto;white-space:nowrap}
+html.lan-mobile-client .file-batch-toolbar{align-items:stretch;flex-direction:column;gap:9px;padding:10px}
+html.lan-mobile-client .file-batch-toolbar .toolbar{display:grid;grid-template-columns:1fr;gap:6px}
+html.lan-mobile-client .file-batch-toolbar .button{min-height:42px;font-size:12px}
+html.lan-mobile-client .file-manager-content table{display:block;width:100%;min-width:0;border:0;border-collapse:separate;border-spacing:0}
+html.lan-mobile-client .file-manager-content thead{display:none}
+html.lan-mobile-client .file-manager-content tbody{display:grid;gap:8px}
+html.lan-mobile-client .file-manager-content tbody tr{display:grid;grid-template-columns:28px minmax(0,1fr);align-items:start;padding:8px 9px;border:1px solid #e4ecef;border-radius:9px;background:#fff;box-shadow:0 2px 8px rgba(29,61,77,.04)}
+html.lan-mobile-client .file-manager-content tbody td{min-width:0;padding:4px!important;border:0!important;overflow-wrap:anywhere;font-size:12px}
+html.lan-mobile-client .file-manager-content tbody td.file-select-column{grid-column:1;grid-row:1/5;display:flex;justify-content:center;padding-top:8px!important}
+html.lan-mobile-client .file-manager-content tbody td.file-select-column input{width:20px;height:20px}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(2){grid-column:2;grid-row:1}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(3){grid-column:2;grid-row:2;color:#74858e;font-size:10px}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(3)::before{content:'修改時間：'}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(4){grid-column:2;grid-row:3;color:#74858e;font-size:10px}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(4)::before{content:'大小：'}
+html.lan-mobile-client .file-manager-content tbody td:nth-child(5){grid-column:2;grid-row:4}
+html.lan-mobile-client .file-manager-content .item-name button{font-size:14px!important;text-align:left}
+html.lan-mobile-client .file-manager-content .item-location{max-width:100%;margin-left:0;white-space:normal;overflow-wrap:anywhere}
+html.lan-mobile-client .file-manager-content .row-actions{gap:5px}
+html.lan-mobile-client .file-manager-content .row-actions .text-action{min-height:38px;padding:7px 9px;font-size:11px}
+html.lan-mobile-client .lan-mobile-nav{z-index:7;display:flex;flex:none;min-height:64px;justify-content:space-around;gap:4px;padding:5px 8px calc(5px + env(safe-area-inset-bottom,0px));border-top:1px solid #dfe7ea;background:rgba(255,255,255,.97);box-shadow:0 -5px 16px rgba(22,50,64,.06)}
+html.lan-mobile-client .lan-mobile-nav button{flex:1;min-width:0;min-height:52px;display:grid;align-content:center;justify-items:center;gap:3px;border:0;border-radius:10px;background:transparent;color:#687d87;font-size:10px}
+html.lan-mobile-client .lan-mobile-nav button[aria-pressed=true]{background:#e7f1ef;color:#176b68;font-weight:700}
+html.lan-mobile-client .lan-mobile-nav button svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+html.lan-mobile-client .lan-mobile-nav button:focus-visible{outline:3px solid #f1b756;outline-offset:1px}
+html.lan-mobile-client .launcher-menu{position:fixed;z-index:8;left:10px;right:10px;bottom:calc(72px + env(safe-area-inset-bottom,0px));width:auto;max-height:calc(100dvh - 136px);overflow:auto;padding:14px;border:1px solid #dce7eb;border-radius:14px;background:rgba(250,252,253,.98);box-shadow:0 14px 40px rgba(20,48,63,.23);backdrop-filter:blur(18px)}
+html.lan-mobile-client .launcher-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+html.lan-mobile-client .launcher-grid>button{min-height:76px;gap:6px;font-size:11px}
+html.lan-mobile-client .launcher-footer{font-size:9px}
+html.lan-mobile-client .confirm-dialog{width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto}
+html.lan-mobile-client .confirm-dialog-content{padding:20px}
+html.lan-mobile-client .confirm-dialog-actions{flex-direction:column-reverse;gap:8px}
+html.lan-mobile-client .confirm-dialog-actions .button{width:100%;min-height:46px;font-size:14px}
+html.lan-mobile-client .toast{left:12px;right:12px;bottom:calc(78px + env(safe-area-inset-bottom,0px));width:auto;max-width:none}
+@media(max-width:380px){html.lan-mobile-client .system-bar-label{display:none}html.lan-mobile-client .file-nav-item{padding-inline:8px}html.lan-mobile-client .launcher-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -1,7 +1,7 @@
 {
   "name": "project-nanako",
   "description": "Nanako Windows 檔案空間原型。",
-  "version": "0.3.0-rc.8",
+  "version": "0.3.0-rc.9",
   "license": "MPL-2.0",
   "private": true,
   "type": "module",
