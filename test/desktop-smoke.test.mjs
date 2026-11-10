@@ -257,17 +257,35 @@ test('Electron desktop setup, restart and local media resume preserve Nanako sta
       menuCentered: Math.abs((menu.left + menu.width / 2) - (area.left + area.width / 2)) < 2,
       dockCentered: Math.abs((dock.left + dock.width / 2) - (area.left + area.width / 2)) < 2,
       positions: { area: { left: area.left, width: area.width }, menu: { left: menu.left, width: menu.width }, dock: { left: dock.left, width: dock.width }, menuStyle: { left: getComputedStyle(document.querySelector('#launcher-menu')).left, translate: getComputedStyle(document.querySelector('#launcher-menu')).translate } },
-      menuIconCount: document.querySelectorAll('#launcher-menu .launcher-grid > button .launcher-icon svg').length,
+      menuIconCount: document.querySelectorAll('#launcher-menu .launcher-grid > button .desktop-icon-art').length,
       menuIcons: document.querySelectorAll('#launcher-menu .launcher-grid > button').length,
+      sharedDesktopArtwork: ['files', 'computer', 'trash', 'album', 'player', 'vault', 'duplicates'].every((view) => document.querySelector('.desktop-shortcuts [data-open-view="' + view + '"] .desktop-icon-art')?.className === document.querySelector('#launcher-menu .launcher-grid [data-open-view="' + view + '"] .desktop-icon-art')?.className),
+      quickArtwork: ['files', 'album', 'player'].every((view) => document.querySelector('#launcher-menu .launcher-quick-list [data-open-view="' + view + '"] .desktop-icon-art')?.className === document.querySelector('#launcher-menu .launcher-grid [data-open-view="' + view + '"] .desktop-icon-art')?.className),
+      shortcutColumns: new Set([...document.querySelectorAll('.desktop-shortcuts>.desktop-icon')].map((item) => Math.round(item.getBoundingClientRect().left))).size,
       shortcutInset: document.querySelector('.desktop-shortcuts').firstElementChild.getBoundingClientRect().left - document.querySelector('.desktop-shortcuts').getBoundingClientRect().left,
       dialogsConsistent: [...document.querySelectorAll('dialog')].every((dialog) => dialog.classList.contains('confirm-dialog') || dialog.classList.contains('photo-dialog')),
     };
   })()`);
   assert.equal(visualConsistency.menuCentered, true, `the dock launcher should open its menu in the desktop center (${JSON.stringify(visualConsistency)})`);
   assert.equal(visualConsistency.dockCentered, true, 'the dock itself should remain centered');
-  assert.equal(visualConsistency.menuIconCount, visualConsistency.menuIcons, 'all launcher applications should use the unified SVG icon system');
+  assert.equal(visualConsistency.menuIconCount, visualConsistency.menuIcons, 'all launcher applications should use a desktop-style icon');
+  assert.equal(visualConsistency.sharedDesktopArtwork, true, 'launcher icons already present on the desktop should reuse the same artwork');
+  assert.equal(visualConsistency.quickArtwork, true, 'quick-launch icons should reuse the same desktop artwork');
+  assert.equal(visualConsistency.shortcutColumns, 2, `the default window should place the overflow shortcut in the second column (${JSON.stringify(visualConsistency)})`);
   assert.ok(visualConsistency.shortcutInset >= 4, 'desktop shortcut focus ring should have room inside its rail');
   assert.equal(visualConsistency.dialogsConsistent, true, 'every app dialog should use the themed dialog style');
+  const responsiveShortcuts = await running.devtools.evaluate(`(() => {
+    const rail = document.querySelector('.desktop-shortcuts');
+    const countColumns = () => new Set([...rail.children].map((item) => Math.round(item.getBoundingClientRect().left))).size;
+    const initial = countColumns();
+    rail.style.bottom = '400px';
+    const compact = countColumns();
+    rail.style.bottom = '';
+    const restored = countColumns();
+    return { initial, compact, restored };
+  })()`);
+  assert.ok(responsiveShortcuts.compact > responsiveShortcuts.initial, 'reducing available desktop height should flow shortcuts into additional columns');
+  assert.equal(responsiveShortcuts.restored, responsiveShortcuts.initial, 'restoring desktop height should restore the previous shortcut columns');
   await running.devtools.evaluate(`(() => document.querySelector('#dock-launcher').click())()`);
   const shellLayout = await running.devtools.evaluate(`(() => {
     const bar = document.querySelector('.system-bar');
