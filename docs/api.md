@@ -43,7 +43,7 @@
 | `PATCH /api/users/{userId}` | 是 | 僅管理員；一般使用者可調整資料空間權限及 `isActive`；停用會立即撤銷該使用者所有工作階段。不可修改自己的帳號，也不可用此端點修改管理員帳號。 |
 | `GET /api/network` | 是 | 回報本機服務連接埠、網路介面清單，以及 LAN 是否啟用、網址與 TLS 公開憑證指紋；不回傳 TLS 私鑰。 |
 | `POST /api/network/lan` | 是 | 僅管理員；JSON `{ "enabled": true, "address": "192.168.1.10", "port": 8765 }` 可啟用／切換所選私有 IPv4 網卡與服務連接埠；`{ "enabled": false, "port": 8765 }` 停止 LAN HTTPS listener。啟用需 Electron 安全儲存與憑證可用，失敗時回報原因；設定會保存在本機並於桌面程式重啟時恢復。 |
-| `POST /api/network/test` | 是 | 手動檢測本機網路介面、loopback／LAN listener 與外網測試端點；只有呼叫此端點時才連線到 Microsoft 連線測試端點，不上傳檔案或查詢公開 IP。 |
+| `POST /api/network/test` | 是 | 手動檢測本機網路介面、loopback／LAN listener 與 Microsoft Windows NCSI 連線測試端點；只有呼叫此端點時才以 HTTP GET 讀取 `http://www.msftconnecttest.com/connecttest.txt`，並比對 `Microsoft Connect Test` 回應。網域首頁不是檢測頁；結果只代表此端點可否連線，不保證所有網站都能連線；不會上傳檔案或查詢公開 IP。 |
 | `GET /api/smb/status` | 是 | 僅管理員；檢查 Windows 產品名稱／組建、`LanmanServer`、TCP 445、`New-SmbShare` 命令及 Nanako 程序提升狀態，並回傳實驗性 SMB 選擇。若系統不支援且曾保存啟用值，會將其清除。不會建立分享、啟停 Windows 服務或修改防火牆；`nanakoSmbReady` 固定為 `false`。 |
 | `POST /api/smb/experimental` | 是 | 僅管理員；JSON `{ "enabled": true|false }` 保存實驗性 SMB 選擇。啟用僅允許產品識別為 Windows 11 且 build ≥ 26100（24H2+）；其他 OS／版本拒絕啟用並保持關閉。這只是持久化功能旗標，尚不會啟動 SMB Server 或 listener。 |
 | `GET /api/system` | 是 | 僅管理員；查看本機電腦名稱、Windows 版本／組建、處理器、記憶體、Nanako 資料磁碟容量、網路介面及目前 Windows 身分、系統管理員群組與程序提升狀態。 |
@@ -51,7 +51,7 @@
 | `POST /api/archive/create` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，在來源旁建立同名 ZIP。來源、暫存與輸出都限制在 Nanako 資料空間。 |
 | `POST /api/archive/extract` | 是 | 需有分享資料夾寫入權限；JSON `{ "shareId", "path" }`，只接受 ZIP，解壓至同名新資料夾；不覆寫現有資料。拒絕路徑跳脫、符號連結、加密 ZIP、衝突路徑及超出大小／項目數限制的封存檔。 |
 | `GET /api/archive/status` | 是 | 查詢目前使用者 ZIP 壓縮／解壓工作的階段、已處理位元組與項目數。 |
-| `POST /api/archive/cancel` | 是 | 取消目前使用者的 ZIP 工作；成品發佈階段開始後會拒絕取消，以避免回報不明確的結果。 |
+| `POST /api/archive/cancel` | 是 | 取消目前使用者的 ZIP 工作；開始將成品寫入目的地後會拒絕取消，以避免回報不明確的結果。 |
 | `GET /api/vault/status` | 是 | 回傳目前使用者的加密空間是否已建立及已解鎖；不回傳金鑰或敏感中繼資料。 |
 | `POST /api/vault/setup` | 是 | JSON `{ "password" }`；為目前 Nanako 使用者建立獨立 vault master key、密碼包覆資料及一次性復原金鑰。加密密碼需 12–256 字元；復原金鑰只在建立時顯示一次，使用者須自行離線保管。 |
 | `POST /api/vault/unlock` | 是 | JSON `{ "password" }`；錯誤密碼回傳 `401`，錯誤 5 次後節流 15 分鐘並回傳 `429`。解鎖節流狀態寫入 SQLite，重啟後未逾期的鎖定仍有效；解鎖金鑰只在服務程序記憶體中，閒置 15 分鐘後鎖定。 |

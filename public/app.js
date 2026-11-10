@@ -849,9 +849,9 @@ async function refreshArchiveProgress() {
     $('#archive-progress-message').textContent = job.totalBytes > 0
       ? `${job.phase} · ${formatSize(job.bytesRead)}／${formatSize(job.totalBytes)}（${percent}%） · 項目 ${job.entriesDone}/${job.totalEntries || '…'}`
       : `${job.phase} · 項目 ${job.entriesDone}/${job.totalEntries || '…'}`;
-    const publishing = job.phase === '發佈 ZIP 成品' || job.phase === '發佈解壓內容';
-    $('#archive-cancel').disabled = publishing;
-    if (publishing) $('#archive-cancel').textContent = '即將完成';
+    const finalizing = job.phase === '寫入 ZIP 檔案' || job.phase === '寫入解壓內容';
+    $('#archive-cancel').disabled = finalizing;
+    if (finalizing) $('#archive-cancel').textContent = '即將完成';
   } catch { /* The archive response remains authoritative if a poll briefly fails. */ }
 }
 
@@ -1277,7 +1277,7 @@ function showVaultRecoveryCode(code) {
   $('#vault-recovery-key-value').value = String(code || '').match(/.{1,4}/gu)?.join('-') || '';
   $('#vault-recovery-key-panel').hidden = false;
   state.vaultRecoveryCodePending = true;
-  setVaultMessage('復原金鑰已更新。請先保存並確認，再關閉此提示；離開畫面後無法再次檢視這組金鑰。');
+  setVaultMessage('復原金鑰已更新。請先妥善保管並確認，再關閉此提示；離開畫面後無法再次檢視這組金鑰。');
   $('#vault-recovery-key-value').focus();
 }
 
@@ -1979,7 +1979,7 @@ async function loadNetwork() {
         lanSelect.append(option);
       }
       if (!lanCandidates.length) {
-        const option = document.createElement('option'); option.value = ''; option.textContent = '沒有可用的私有 IPv4 網卡'; lanSelect.append(option);
+        const option = document.createElement('option'); option.value = ''; option.textContent = '沒有可用的私人 IPv4 網路介面卡'; lanSelect.append(option);
       }
       lanSelect.value = lanCandidates.some((item) => item.address === previousAddress) ? previousAddress : lanCandidates[0]?.address || '';
       $('#lan-port').value = String(result.lan?.port || 8765);
@@ -1995,7 +1995,7 @@ async function loadNetwork() {
       const status = $('#lan-access-status');
       status.classList.toggle('error', Boolean(result.lan?.error));
       status.textContent = result.lan?.error || (enabled
-        ? '區域網路 HTTPS 已啟用；連線只接受此網卡所在的私人子網路。'
+        ? '區域網路 HTTPS 已啟用；連線只接受所選網路介面卡所屬的私人子網路。'
         : '區域網路存取目前關閉。');
       const endpoint = $('#lan-access-url');
       endpoint.hidden = !enabled;
@@ -2020,7 +2020,7 @@ function validateLanSettings() {
   address.setAttribute('aria-invalid', String(!validAddress));
   port.setAttribute('aria-invalid', String(!validPort));
   addressError.hidden = validAddress;
-  addressError.textContent = validAddress ? '' : '請選擇目前連線中的私有 IPv4 網卡。';
+  addressError.textContent = validAddress ? '' : '請選取目前連線中的私人 IPv4 網路介面卡。';
   portError.hidden = validPort;
   portError.textContent = validPort ? '' : '連接埠須為 1024–65535 的整數。';
   const button = $('#toggle-lan-access');
@@ -2055,7 +2055,7 @@ async function toggleLanAccess() {
 async function runNetworkCheck() {
   const button = $('#network-test-button');
   const message = $('#network-check-message');
-  button.disabled = true; message.textContent = '正在檢查本機網路介面與外網連線…';
+  button.disabled = true; message.textContent = '正在檢查本機網路介面與網際網路連線…';
   try {
     const result = await api('/api/network/test', { method: 'POST', body: JSON.stringify({}) });
     const internal = result.internal;
@@ -2074,12 +2074,12 @@ async function runNetworkCheck() {
     }
     const external = result.external;
     const externalLabels = {
-      connected: '已連線至網際網路', redirected: '外網回應遭重新導向，可能需要登入網路入口網站',
-      limited: '可連線，但測試端點回應異常', unreachable: '無法連線至外網測試端點', timeout: '外網檢測逾時',
+      connected: 'Microsoft 檢測端點可連線', redirected: '檢測回應遭重新導向，可能需要登入網路入口網站',
+      limited: '可連線，但檢測檔內容異常', unreachable: '無法連線至 Microsoft 檢測端點', timeout: '連線至 Microsoft 檢測端點逾時',
     };
     const latency = Number.isFinite(external.latencyMs) ? ` · ${external.latencyMs} ms` : '';
     $('#network-check-external').textContent = `${externalLabels[external.status] || '無法判定'}${latency} · ${external.endpoint}`;
-    message.textContent = `檢測完成：內網 ${internal.status === 'available' ? '可用' : '未偵測到介面'}；外網 ${externalLabels[external.status] || '無法判定'}。`;
+    message.textContent = `檢測完成：本機網路 ${internal.status === 'available' ? '可用' : '未偵測到介面'}；${externalLabels[external.status] || 'Microsoft 檢測端點狀態無法判定'}。`;
   } catch (error) {
     message.textContent = `網路檢測失敗：${error.message}`;
     $('#network-check-external').textContent = '無法取得檢測結果。';
@@ -2156,15 +2156,15 @@ function renderSmbExperimentalStatus(experimental = {}, version = {}) {
   }
   note.textContent = '此電腦符合 Windows 11 24H2 以上的實驗性功能資格。';
   message.textContent = experimental.enabled
-    ? '實驗性功能選擇已保存；SMB 伺服器尚未整合，目前不會開始監聽。'
-    : '實驗性功能預設關閉；勾選後只保存選擇，不會啟動 SMB 伺服器。';
+    ? '實驗性功能選擇已儲存；SMB 伺服器尚未整合，目前不會開始監聽。'
+    : '實驗性功能預設關閉；勾選後只會儲存選擇，不會啟動 SMB 伺服器。';
 }
 
 async function toggleExperimentalSmb(event) {
   const checkbox = event.currentTarget;
   const requestedEnabled = checkbox.checked;
   checkbox.disabled = true;
-  $('#smb-experimental-message').textContent = '正在保存實驗性 SMB 設定…';
+  $('#smb-experimental-message').textContent = '正在儲存實驗性 SMB 設定…';
   try {
     const result = await api('/api/smb/experimental', {
       method: 'POST', body: JSON.stringify({ enabled: requestedEnabled }),
@@ -2503,7 +2503,7 @@ $('#vault-setup-form').addEventListener('submit', async (event) => {
   try {
     const result = await api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ password }) });
     form.reset(); showVaultRecoveryCode(result.recoveryCode); await loadVault();
-    setVaultMessage('加密空間已建立。請立即將復原金鑰保存至 Nanako 資料空間以外的安全位置。');
+    setVaultMessage('加密空間已建立。請立即將復原金鑰保管在 Nanako 資料空間以外的安全位置。');
   } catch (error) { setVaultMessage(error.message, true); }
   finally { button.disabled = false; }
 });
@@ -2522,7 +2522,7 @@ $('#vault-recover-form').addEventListener('submit', async (event) => {
   const form = event.currentTarget; const values = new FormData(form); const button = form.querySelector('[type="submit"]'); button.disabled = true;
   try {
     await api('/api/vault/recover', { method: 'POST', body: JSON.stringify({ recoveryCode: values.get('recoveryCode') }) });
-    form.reset(); $('#vault-unlock-form').reset(); await loadVault(); setVaultMessage('已使用復原金鑰解鎖。若忘記原密碼，可在「已解鎖」區段設定新密碼；請一併妥善保存復原金鑰。');
+    form.reset(); $('#vault-unlock-form').reset(); await loadVault(); setVaultMessage('已使用復原金鑰解鎖。若忘記原密碼，可在「已解鎖」區段設定新密碼；請一併妥善保管復原金鑰。');
   } catch (error) { setVaultMessage(error.message, true); }
   finally { button.disabled = false; }
 });
@@ -2547,10 +2547,10 @@ $('#vault-recovery-key-rotate').addEventListener('click', async () => {
 $('#vault-recovery-key-copy').addEventListener('click', async () => {
   const code = $('#vault-recovery-key-value').value;
   try { await navigator.clipboard.writeText(code); setVaultMessage('復原金鑰已複製。請確認已貼到安全位置後再關閉提示。'); }
-  catch { $('#vault-recovery-key-value').select(); setVaultMessage('無法自動複製；已選取復原金鑰，請手動複製並保存。', true); }
+  catch { $('#vault-recovery-key-value').select(); setVaultMessage('無法自動複製；已選取復原金鑰，請手動複製並妥善保管。', true); }
 });
 $('#vault-recovery-key-saved').addEventListener('click', () => {
-  if (!confirm('確認已將復原金鑰保存到 Nanako 資料空間以外的安全位置？關閉後無法再次檢視這組金鑰。')) return;
+  if (!confirm('確認已將復原金鑰妥善保管在 Nanako 資料空間以外的安全位置？關閉後無法再次檢視這組金鑰。')) return;
   clearVaultRecoveryCode(); setVaultMessage('已關閉復原金鑰提示；你仍可在加密空間解鎖後重新產生金鑰。');
 });
 $('#vault-source-share').addEventListener('change', (event) => { state.vaultSourceShareId = event.currentTarget.value; state.vaultSourcePath = ''; loadVaultSource(); });

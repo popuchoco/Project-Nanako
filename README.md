@@ -1,95 +1,108 @@
 # Project Nanako
 
-Windows 優先的本機檔案空間原型，以 Electron 提供受限檔案管理、本機帳號權限、媒體播放、ZIP、加密空間、傳輸任務監看與網路診斷。
+以 Windows 電腦為主的本機檔案空間原型。Nanako 提供桌面操作介面、本機帳號與檔案權限，也可選擇讓同一私人網路中的其他裝置透過瀏覽器存取檔案。
 
-> **目前狀態**：0.3.0-rc.4 為預發行版，提供預設關閉的區域網路 HTTPS 網頁登入原型及 Windows 11 24H2+ 限定的 SMB 實驗性開關。LAN 跨裝置與防火牆環境仍待實際驗收；SMB 檔案總管分享尚未實作，開關不會啟動 SMB 服務。這是實驗性原型，不是可直接取代正式 NAS 的產品，也不是經獨立安全審查的保險箱。
+> **目前版本：`0.3.0-rc.5`（預先發行測試版）**｜[下載 Windows x64 版本](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.5)｜[檢視版本紀錄](CHANGELOG.md)
 
-## Project Nanako 是什麼？
+Nanako 仍在開發中，並非可直接取代正式 NAS 的產品。特別是 **SMB 檔案分享尚未實作**；目前的 SMB 實驗性開關不會建立分享或啟動 SMB 服務。
 
-Project Nanako 在一般 Windows 電腦上提供一個本機優先、類 NAS 的檔案空間，不需要專用 NAS 硬體。Electron 桌面程式內含本機 HTTP 服務，並以 Nanako 自己的桌面、工作列與多視窗介面管理檔案、相片及影音；管理員也可選擇啟用私人子網路內的 HTTPS 網頁登入，讓其他裝置透過瀏覽器登入後使用 Nanako 網頁介面上傳、下載及管理授權檔案。這是網頁檔案傳輸，與 SMB 分享是不同功能。
+## 網路存取方式
 
-「sandbox」描述的是應用程式的資料範圍：一般檔案操作固定在 Nanako 的 `NanakoData`，不會瀏覽或管理其他磁碟、Windows 個人資料夾或任意路徑。它**不是 Windows 作業系統層級的安全沙箱**；具備 Windows 檔案系統存取權的人仍可能直接存取未放入加密空間的一般檔案。
+### 區域網路網頁存取
 
-## 目前已實作
+管理員可在 Nanako 桌面版的「網路狀態」設定中，選取一張已連線的私人 IPv4 網路介面卡、指定服務連接埠，再啟用 HTTPS 網頁登入。其他裝置登入後，可依使用者權限透過同一套 Nanako 網頁介面瀏覽、上傳及下載檔案。
 
-- **Nanako 桌面**：桌面捷徑、啟動器、工作列／Dock、時鐘與內部應用程式視窗。視窗可拖曳、移動、最小化、最大化／還原及關閉；Windows 桌面與 Shell 不會被接管。Windows 桌面版提供系統匣，關閉主視窗會隱藏程式，從系統匣退出才停止服務。
-- **本機帳號與權限**：首次設定管理員、建立使用者、指定資料空間讀寫權限、停用／啟用帳號、變更密碼與登入節流。帳號與工作階段存在本機 SQLite；密碼使用 scrypt 雜湊。
-- **檔案管理**：資料夾瀏覽與建立、上傳／下載、重新命名、移動、複製、批次操作、資源回收桶與還原。操作限於 Nanako 資料空間，並檢查讀寫權限。
-- **搜尋與整理**：依圖片、影片、音訊、文件分類搜尋 Nanako 資料空間；支援檔名篩選、排序及重複檔案掃描／可復原整理。掃描有數量上限，不會搜尋 Windows 其他磁碟。
-- **相簿與播放器**：可在資料夾瀏覽或資料空間媒體索引間切換；播放器使用受權限保護的 HTTP Range 串流，播放進度保存在本機並可續播。格式相容性仍取決於 Electron／Chromium 與實際媒體檔。
-- **ZIP 與加密空間原型**：NanakoData 內的串流壓縮／解壓縮與 ZIP 路徑、CRC 等檢查；加密空間支援加密檔案、復原金鑰、加密資源回收筒，以及同一 NanakoData 內的加密備份／還原。
-- **管理與記錄**：管理員可查看電腦資訊、Windows SMB 前置狀態及本機操作紀錄，並設定紀錄保留期限。
-- **SMB 實驗性旗標**：僅 Windows 11 24H2 以上可勾選啟用；較舊版本及非 Windows 一律預設關閉並鎖定。旗標只保存啟用意願，不代表 SMB 伺服器已整合或正在監聽。
-- **Windows 發行方式**：提供 x64 可攜式執行檔與 NSIS 單一使用者安裝程式。安裝不要求系統管理員提升，也不會安裝 Windows 服務或修改系統分享設定。
-- **區域網路 HTTPS 網頁存取（預設關閉）**：管理員可選擇一張私有 IPv4 網卡與 1024–65535 連接埠，其他裝置可透過瀏覽器登入 Nanako 網頁介面，依權限上傳、下載及管理檔案；TLS 私鑰由 Windows DPAPI 保護，連線限制在選定網卡的子網路。這不是 SMB 網路磁碟機服務；不會自動建立防火牆規則或路由器轉送。
+- 預設關閉，只接受所選網路介面卡所屬子網路內的連線。
+- 使用自簽 TLS 憑證；首次連線時，請核對 Nanako 顯示的 SHA-256 憑證指紋。
+- Nanako 不會自動修改 Windows 防火牆或路由器設定；需要時請自行允許私人網路連線。
+- 這是 **HTTPS 網頁服務**，不是 SMB，也不會在檔案總管中建立網路磁碟機。
 
-## 範圍與限制
+### SMB 網路分享
 
-- Electron 桌面版可選擇性啟用私人子網路 HTTPS 網頁登入；命令列模式仍只綁定迴圈介面（預設 `127.0.0.1:8765`）。
-- LAN 網頁存取使用自簽憑證；其他裝置首次連線會顯示憑證提示，需比對 Nanako 顯示的 SHA-256 指紋。Windows 防火牆需由使用者自行允許私人網路連線；不可將連接埠轉送到公開網際網路。跨裝置及防火牆環境尚待驗收。網頁上傳／下載透過 HTTPS 網頁服務，不依賴 SMB。
-- 網頁登入與 SMB 是不同功能。Nanako SMB Server、檔案總管分享及跨平台互通仍未實作；即使符合版本條件並開啟實驗性旗標，也不會啟動 listener、建立 Windows 分享或修改防火牆。
-- 加密空間仍是本機原型，尚未完成獨立安全審查、完整磁碟故障注入與異地備份流程。備份目前仍在同一個 `NanakoData`，不能防止裝置或整個資料目錄遺失，也不承諾 SSD 安全抹除。
-- 原始碼目前不包含雲端登入、遙測或遠端更新功能；完整發行封裝的外部網路流量尚未完成封包層驗證。
-- 不建議用於公開部署或存放唯一的重要資料。發行前仍需持續完成安全、相容性、升級與復原驗證。
+SMB 是另一種網路存取方式，預期用於 Windows 檔案總管的網路分享。目前 Nanako 尚未整合 SMB 伺服器、建立 SMB 分享或啟動 SMB 監聽服務。
 
-## 快速開始
+設定頁中的「SMB 實驗性功能」目前只會將管理員的啟用選擇寫入設定：預設關閉，且僅 Windows 11 24H2 以上可勾選。**勾選後仍不會啟動 SMB 分享。**
 
-需求：Windows、Node.js 22.13 以上與 npm。
+## 功能概覽
+
+- **桌面操作介面**：桌面捷徑、啟動器、工作列、Dock 與可移動、最小化及關閉的應用程式視窗；Windows 桌面與 Shell 不會被取代。
+- **本機帳號與權限**：建立本機使用者、設定顯示名稱、管理資料空間讀寫權限、變更密碼及停用帳號。
+- **檔案管理**：建立資料夾、上傳、下載、重新命名、移動、複製、批次操作、資源回收筒與還原。
+- **相片與媒體**：相簿、音訊／影片播放、媒體搜尋及播放進度續播；可播放格式依 Electron／Chromium 與實際檔案而異。
+- **整理工具**：依檔案類型搜尋、排序、重複檔案掃描與 ZIP 壓縮／解壓縮。
+- **加密空間原型**：加密檔案、復原金鑰、加密資源回收筒及本機備份／還原。此功能仍是原型，備份不會離開 Nanako 資料目錄。
+- **傳輸與網路資訊**：檢視正在進行的上傳／下載及傳輸速率；手動檢查本機網路與 Microsoft Windows NCSI 檢測端點的連線。測試讀取 [`http://www.msftconnecttest.com/connecttest.txt`](http://www.msftconnecttest.com/connecttest.txt)，不是網站首頁；結果只代表此端點可否連線，不保證所有網站都能連線，也不會上傳檔案。
+- **Windows 桌面版**：提供 x64 可攜式執行檔及 NSIS 單一使用者安裝程式；不安裝 Windows 服務，安裝時也不需以系統管理員身分執行。
+
+一般檔案與操作均限制在 Nanako 管理的 `NanakoData` 範圍內，不提供瀏覽或管理其他磁碟、Windows 個人資料夾或任意路徑。此限制是應用程式的資料範圍，不是 Windows 作業系統層級的安全沙箱；一般檔案預設不會加密。
+
+## 下載與啟動
+
+前往 [`v0.3.0-rc.5` 發行頁面](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.5)，選擇適合的 Windows x64 套件：
+
+- **Portable**：免安裝，執行檔與 `NanakoData` 放在同一位置。
+- **Setup**：單一使用者安裝程式，資料放在該使用者的應用程式資料目錄。
+- **`SHA256SUMS.txt`**：下載後可用來核對安裝檔與可攜式執行檔的 SHA-256 雜湊值。
+
+這是預先發行測試版，建議先使用可復原的測試資料試用。從可攜式版轉到安裝版時，兩者使用不同資料目錄，不會自動搬移資料。
+
+## 從原始碼執行
+
+需求：Windows、Node.js 22.13 以上及 npm。
 
 ```powershell
-npm install
+npm ci
 
-# 本機網頁原型（127.0.0.1:8765）
+# 啟動本機服務與網頁介面（預設 127.0.0.1:8765）
 npm start
 
-# 或啟動 Electron 桌面程式
+# 或啟動 Electron 桌面版
 npm run desktop
 ```
 
-程式首次啟動時建立本機管理員帳號。桌面版預設只供本機使用；管理員可在「網路狀態」明確啟用區域網路登入。命令列模式可用 `LOCALNAS_PORT` 更改本機連接埠，但仍只接受迴圈介面位址。
+首次啟動時，請依畫面建立 Nanako 管理員帳號。命令列模式只接受迴圈介面連線；區域網路 HTTPS 功能僅提供於 Electron 桌面版，且必須由管理員手動開啟。
 
 ### 資料位置
 
-| 模式 | NanakoData 位置 |
+| 執行方式 | `NanakoData` 位置 |
 | --- | --- |
-| 可攜式 Windows 執行檔 | 執行檔旁的 `NanakoData/` |
+| Windows 可攜式版 | 執行檔旁的 `NanakoData/` |
 | NSIS 使用者安裝版 | 該 Windows 使用者的 Electron `userData/NanakoData/` |
 | 開發／命令列模式 | 專案目錄中的 `NanakoData/` |
 
-以上模式使用不同資料目錄，不會自動互相搬移。解除安裝不會主動刪除使用者資料。從可攜式版轉移至安裝版前，請先完整退出程式並備份；詳細步驟見[安裝與資料位置](docs/installation.md)。
+解除安裝不會主動刪除使用者資料。備份或搬移資料前，請先完整退出 Nanako，並參閱[安裝與資料位置](docs/installation.md)。
 
 ## 測試與封裝
 
 ```powershell
-npm test                         # 單元與整合測試
-npm run test:desktop-smoke       # Windows Electron 首次設定、操作與重啟資料保留
-npm run test:media               # Electron 執行期媒體能力與可產生測試片段檢查
-npm run package:win              # Windows x64 可攜式版，輸出至 dist/
-npm run package:win:installer    # Windows x64 NSIS 使用者安裝版，輸出至 dist/
+npm test                         # 全部單元與整合測試
+npm run test:desktop-smoke       # Electron 桌面啟動與資料保留測試
+npm run test:media               # 檢查 Electron 媒體能力與測試片段
+npm run package:win              # 建立 Windows x64 可攜式版
+npm run package:win:installer    # 建立 Windows x64 NSIS 安裝版
 ```
 
-媒體測試報告反映 Electron 內建 Chromium 的能力及測試片段結果，不代表所有來源檔格式都能播放。封裝後亦可執行 `Nanako-0.3.0-x64-portable.exe --media-compatibility-test` 產生媒體相容性報告。
+GitHub Actions 會在推送版本標籤後執行測試、Windows 封裝及封裝後驗證。一般版本標籤會建立正式 Release；含 `-rc` 或 `-preview` 等預先發行標記的版本標籤會建立 GitHub 預先發行版。驗證失敗時不會發行套件。
 
-## GitHub Actions 自动发布
+## 已知限制
 
-版本标签会触发 [Windows release workflow](.github/workflows/release.yml)。推送标签前，先让 package.json 与 package-lock.json 的版本号同步为该版本并提交；workflow 会检查标签与两处版本一致，再运行测试、建置及封装后 smoke tests。
+- 區域網路登入使用自簽憑證，尚未完成不同裝置、網路介面卡與 Windows 防火牆組合的測試；請只在可信任的私人網路使用，不要將連接埠轉送至公開網際網路。
+- SMB 分享服務尚未實作；實驗性開關不等於可用的檔案總管分享功能。
+- 加密空間仍是原型，尚未完成獨立安全審查、完整故障注入及異地備份流程；同一台裝置或同一資料目錄的備份無法防止裝置遺失。
+- 專案目前沒有雲端帳號、遙測或自動更新功能。內部 API 尚非穩定的外部整合介面。
 
-- 普通版本标签（例如 v0.3.0）会建立正式 Release。
-- 带 SemVer 预发布后缀的标签（例如 v0.4.0-rc.1 或 v0.4.0-preview.1）会建立 GitHub Pre-release。
-- Release 会附上 Windows x64 可携式版、NSIS 安装版与 SHA256SUMS.txt。任何验证失败时都不会发布。
+## 專案文件
 
-## 文件
-
-- [版本規劃與各里程碑狀態](docs/roadmap.md)
+- [版本規劃與里程碑](docs/roadmap.md)
 - [安裝與資料位置](docs/installation.md)
 - [系統架構](docs/architecture.md)
-- [目前本機 API](docs/api.md)
-- [Electron 媒體相容性初測](docs/media-compatibility-report.md)
-- [SMB 區域網路分享規劃](docs/smb-implementation-plan.md)
-- [加密空間與 ZIP 原型／驗證](docs/feature-plan-encryption-and-archives.md)
+- [API 文件](docs/api.md)
+- [臺灣繁體中文用語指南](docs/terminology.md)
+- [SMB 實作規劃](docs/smb-implementation-plan.md)
+- [加密空間與 ZIP 原型](docs/feature-plan-encryption-and-archives.md)
 - [版本紀錄](CHANGELOG.md)
-- [第三方專案與授權](THIRD_PARTY.md)
-- [Mozilla Public License 2.0](LICENSE)
+- [第三方套件與授權](THIRD_PARTY.md)
 
----
-Project Nanako 以 [MPL-2.0](LICENSE) 授權。原始碼：[GitHub](https://github.com/popuchoco/Project-Nanako)。
+## 授權
+
+Project Nanako 以 [Mozilla Public License 2.0（MPL-2.0）](LICENSE) 授權。

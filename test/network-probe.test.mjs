@@ -13,6 +13,8 @@ test('external network probe reports a successful Microsoft connectivity check w
   });
   assert.equal(result.status, 'connected');
   assert.equal(result.latencyMs, 18);
+  assert.equal(EXTERNAL_NETWORK_TEST_URL, 'http://www.msftconnecttest.com/connecttest.txt');
+  assert.equal(result.endpoint, EXTERNAL_NETWORK_TEST_URL);
   assert.equal(calls[0].url, EXTERNAL_NETWORK_TEST_URL);
   assert.equal(calls[0].options.method, 'GET');
   assert.equal(calls[0].options.redirect, 'manual');

@@ -27,7 +27,7 @@ export function createArchiveRouter(ctx) {
     if (route === '/api/archive/cancel' && method === 'POST') {
       const job = activeArchiveJobs.get(user.id);
       if (!job) return json(res, 200, { active: false });
-      if (job.phase === '發佈 ZIP 成品' || job.phase === '發佈解壓內容') throw fail(409, 'archive_too_late_to_cancel', 'ZIP 成品發佈階段已開始，無法安全取消；請等待作業完成。');
+      if (job.phase === '寫入 ZIP 檔案' || job.phase === '寫入解壓內容') throw fail(409, 'archive_too_late_to_cancel', 'ZIP 檔案已開始寫入目的地，無法安全取消；請等待作業完成。');
       job.controller.abort();
       return json(res, 200, { active: true, cancelling: true });
     }

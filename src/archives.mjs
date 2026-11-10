@@ -133,7 +133,7 @@ export async function createArchive({ sourcePath, shareRoot, archivePath, signal
     if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     const outputInfo = await stat(temporaryPath);
     if (!outputInfo.isFile() || outputInfo.size === 0) throw archiveError(500, 'archive_write_failed', 'ZIP 檔案建立失敗。');
-    onProgress?.({ phase: '發佈 ZIP 成品', bytesRead: totals.bytes, totalBytes: totals.bytes, entriesDone: rows.length, totalEntries: rows.length });
+    onProgress?.({ phase: '寫入 ZIP 檔案', bytesRead: totals.bytes, totalBytes: totals.bytes, entriesDone: rows.length, totalEntries: rows.length });
     if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await rename(temporaryPath, archivePath);
     return { size: outputInfo.size, entryCount: rows.length, sourceBytes: totals.bytes };
@@ -300,7 +300,7 @@ export async function extractArchive({ archivePath, shareRoot, destinationPath, 
     if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await reader.close();
     reader = null;
-    onProgress?.({ phase: '發佈解壓內容', bytesRead: summary.expandedBytes, totalBytes: summary.expandedBytes, entriesDone: entries.length, totalEntries: entries.length });
+    onProgress?.({ phase: '寫入解壓內容', bytesRead: summary.expandedBytes, totalBytes: summary.expandedBytes, entriesDone: entries.length, totalEntries: entries.length });
     if (signal?.aborted) throw archiveError(499, 'archive_cancelled', 'ZIP 作業已取消。');
     await rename(stagingPath, destinationPath);
     return summary;

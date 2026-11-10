@@ -58,7 +58,7 @@
         <p id="desktop-widget-date" class="desktop-widget-date"></p>
         <div class="desktop-widget-rule" aria-hidden="true"></div>
         <div class="desktop-widget-storage"><span>可用資料空間</span><strong id="desktop-widget-share-count">讀取中</strong></div>
-        <div class="desktop-widget-footer"><span>內容僅存於 NanakoData</span><button class="widget-link" data-open-view="computer" type="button">查看儲存空間 <span aria-hidden="true">→</span></button></div>
+          <div class="desktop-widget-footer"><span>內容僅存於 NanakoData</span><button class="widget-link" data-open-view="computer" type="button">檢視儲存空間 <span aria-hidden="true">→</span></button></div>
       </aside>
 
       <div id="window-layer" class="window-layer" aria-label="Nanako 應用程式視窗"></div>
@@ -115,7 +115,7 @@
         <div class="notice duplicate-scope-note"><strong>掃描範圍固定於 NanakoData</strong><p>不會列出或掃描其他磁碟、Windows 資料夾或任意路徑。掃描只讀取檔案以比對內容，不會修改檔案；整理前會讓你逐組選擇保留項目並再次確認。</p></div>
         <div id="duplicate-scan-progress" class="duplicate-progress" hidden><p id="duplicate-scan-status" role="status" aria-live="polite"></p><progress id="duplicate-progress-meter" max="100" value="0" aria-label="重複檔案掃描進度"></progress></div>
         <p id="duplicate-scan-message" class="inline-message" role="status" aria-live="polite" hidden></p>
-        <button id="duplicate-open-trash" class="text-action duplicate-trash-link" type="button" hidden>查看資源回收桶</button>
+            <button id="duplicate-open-trash" class="text-action duplicate-trash-link" type="button" hidden>檢視資源回收桶</button>
         <section id="duplicate-results" class="duplicate-results" aria-labelledby="duplicate-results-title" hidden>
           <div class="content-heading"><div><h3 id="duplicate-results-title">掃描結果</h3><p id="duplicate-results-summary" class="muted"></p></div></div>
           <div id="duplicate-groups" class="duplicate-groups"></div>
@@ -169,9 +169,9 @@
 
       <section id="view-vault" class="view-panel" hidden>
         <div class="content-heading"><div><h2>加密空間</h2><p class="muted">每個 Nanako 帳號各自持有金鑰；管理員不能代替其他帳號解鎖。</p></div><button id="vault-lock-button" class="button secondary" type="button" hidden>立即鎖定</button></div>
-        <div class="notice vault-prototype-notice"><strong>加密空間仍為原型，尚未完成獨立安全審查</strong><p>移入會先驗證密文，再移除 Nanako 資料空間中的原檔；原始磁碟區塊是否能被復原，取決於檔案系統與儲存裝置，本功能不保證安全抹除。請妥善保存復原金鑰，並勿放入唯一副本或實際機密資料。</p></div>
+        <div class="notice vault-prototype-notice"><strong>加密空間仍為原型，尚未完成獨立安全審查</strong><p>移入會先驗證密文，再移除 Nanako 資料空間中的原檔；原始磁碟區塊是否能被復原，取決於檔案系統與儲存裝置，本功能不保證安全抹除。請妥善保管復原金鑰，並勿放入唯一副本或實際機密資料。</p></div>
         <section id="vault-setup-panel" class="card vault-form-panel" hidden>
-          <div><h3>建立個人金鑰</h3><p class="muted">請設定與 Nanako 登入密碼分開的加密空間密碼。建立後會提供一次性復原金鑰，請離線保存。</p></div>
+          <div><h3>建立個人金鑰</h3><p class="muted">請設定與 Nanako 登入密碼分開的加密空間密碼。建立後會提供一次性復原金鑰，請離線保管。</p></div>
           <form id="vault-setup-form" class="form-stack">
             <label>加密空間密碼<input id="vault-setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
             <label>再次輸入加密空間密碼<input id="vault-setup-confirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
@@ -179,9 +179,9 @@
           </form>
         </section>
         <section id="vault-recovery-key-panel" class="card vault-recovery-card" hidden>
-          <div><h3>請立即保存復原金鑰</h3><p class="muted">這組金鑰只會顯示這一次。請存放在 Nanako 資料空間以外的安全位置；遺失後無法由管理員或 Nanako 還原。任何取得金鑰的人都能解鎖此加密空間。</p></div>
+          <div><h3>請立即保管復原金鑰</h3><p class="muted">這組金鑰只會顯示這一次。請存放在 Nanako 資料空間以外的安全位置；遺失後無法由管理員或 Nanako 還原。任何取得金鑰的人都能解鎖此加密空間。</p></div>
           <label>加密空間復原金鑰<textarea id="vault-recovery-key-value" rows="3" readonly spellcheck="false" autocomplete="off"></textarea></label>
-          <div class="vault-row-actions"><button id="vault-recovery-key-copy" class="button secondary" type="button">複製復原金鑰</button><button id="vault-recovery-key-saved" class="button primary" type="button">我已妥善保存</button></div>
+          <div class="vault-row-actions"><button id="vault-recovery-key-copy" class="button secondary" type="button">複製復原金鑰</button><button id="vault-recovery-key-saved" class="button primary" type="button">我已妥善保管</button></div>
         </section>
         <section id="vault-unlock-panel" class="card vault-form-panel" hidden>
           <div><h3>加密空間已鎖定</h3><p class="muted">金鑰只會暫存在 Nanako 程序記憶體；手動鎖定、登出、閒置 15 分鐘或重新啟動後會鎖定。</p></div>
@@ -209,7 +209,7 @@
           <section class="card vault-browser-card">
             <div class="content-heading"><div><h3>已上鎖檔案</h3><p class="muted">名稱及索引內容以加密方式儲存；支援格式可在 Nanako 視窗內預覽或播放。</p></div><button id="vault-refresh" class="button secondary" type="button">重新整理</button></div>
             <div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-object-list"></tbody></table><p id="vault-object-empty" class="empty-state" hidden>加密空間目前沒有檔案。</p></div>
-            <section class="vault-trash-section"><div class="content-heading"><div><h3>加密空間資源回收筒</h3><p class="muted">移入資源回收筒的檔案仍以密文保存；可還原或明確永久刪除。</p></div><button id="vault-trash-refresh" class="button secondary" type="button">重新整理</button></div><div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">移除時間</th><th scope="col">操作</th></tr></thead><tbody id="vault-trash-list"></tbody></table><p id="vault-trash-empty" class="empty-state" hidden>加密空間資源回收筒是空的。</p></div></section>
+            <section class="vault-trash-section"><div class="content-heading"><div><h3>加密空間資源回收筒</h3><p class="muted">移入資源回收筒的檔案仍以密文儲存；可還原或明確永久刪除。</p></div><button id="vault-trash-refresh" class="button secondary" type="button">重新整理</button></div><div class="table-wrap"><table><thead><tr><th scope="col">檔案名稱</th><th scope="col">移除時間</th><th scope="col">操作</th></tr></thead><tbody id="vault-trash-list"></tbody><p id="vault-trash-empty" class="empty-state" hidden>加密空間資源回收筒是空的。</p></div></section>
             <section class="vault-trash-section"><div class="content-heading"><div><h3>加密備份</h3><p class="muted">備份以密文存放在 NanakoData，包含檔案本體與加密索引；此為同一資料目錄內的還原點，不是異地備份。</p></div><button id="vault-backup-create" class="button primary" type="button">建立備份</button></div><div class="table-wrap"><table><thead><tr><th scope="col">建立時間</th><th scope="col">檔案數</th><th scope="col">密文大小</th><th scope="col">操作</th></tr></thead><tbody id="vault-backup-list"></tbody></table><p id="vault-backup-empty" class="empty-state" hidden>尚未建立加密備份。</p></div></section>
             <section id="vault-preview-panel" class="vault-preview-panel" hidden><div class="content-heading"><h3 id="vault-preview-title">檔案預覽</h3><button id="vault-preview-close" class="button secondary" type="button">關閉預覽</button></div><div id="vault-preview-content" class="vault-preview-content"></div><p id="vault-preview-message" class="inline-message" role="status" hidden></p></section>
           </section>
@@ -232,12 +232,12 @@
       </section>
 
       <section id="view-system" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>電腦資訊</h2><p class="muted">查看本機 Windows 身分與目前程序是否已提升至系統管理員權限，以及作業系統、處理器、記憶體、資料磁碟與網路介面概況。</p></div><button id="refresh-system" class="button secondary" type="button">重新整理</button></div>
+          <div class="content-heading"><div><h2>電腦資訊</h2><p class="muted">檢視本機 Windows 身分、系統管理員群組，以及 Nanako 程式目前是否已提升權限；另顯示作業系統、處理器、記憶體、資料磁碟與網路介面資訊。</p></div><button id="refresh-system" class="button secondary" type="button">重新整理</button></div>
         <div id="system-information" class="system-grid" aria-live="polite"><div class="card">讀取電腦資訊中…</div></div>
       </section>
 
       <section id="view-tasks" class="view-panel" hidden>
-        <div class="content-heading"><div><h2>任務管理</h2><p class="muted">即時查看目前 Nanako 檔案上傳與下載狀態；速率為最近一秒的估算值。</p></div><button id="refresh-tasks" class="button secondary" type="button">立即更新</button></div>
+          <div class="content-heading"><div><h2>任務管理</h2><p class="muted">即時檢視 Nanako 檔案的上傳與下載狀態；速率為最近一秒的估算值。</p></div><button id="refresh-tasks" class="button secondary" type="button">立即更新</button></div>
         <div class="task-metrics">
           <section class="card task-metric-card"><span>上傳速度</span><strong id="task-upload-rate">0 B/s</strong><p>進行中 <b id="task-upload-count">0</b> 個檔案</p></section>
           <section class="card task-metric-card"><span>下載速度</span><strong id="task-download-rate">0 B/s</strong><p>進行中 <b id="task-download-count">0</b> 個檔案</p></section>
@@ -261,7 +261,7 @@
         </section>
         <section class="card audit-log-card" aria-labelledby="audit-log-title">
           <div class="content-heading"><div><h3 id="audit-log-title">使用者操作紀錄</h3><p id="audit-log-summary" class="muted">最近的操作會顯示在這裡。</p></div><div class="toolbar"><button id="refresh-audit-logs" class="button secondary" type="button">重新整理</button><button id="clear-audit-logs" class="button danger" type="button">刪除所有使用者操作紀錄</button></div></div>
-          <div class="table-wrap"><table><thead><tr><th scope="col">時間</th><th scope="col">使用者</th><th scope="col">操作</th><th scope="col">項目</th><th scope="col">結果</th></tr></thead><tbody id="audit-log-list"></tbody></table><div id="empty-audit-logs" class="empty-state" hidden><strong>目前沒有操作紀錄</strong><span>之後的使用者操作會依保留期限保存。</span></div></div>
+          <div class="table-wrap"><table><thead><tr><th scope="col">時間</th><th scope="col">使用者</th><th scope="col">操作</th><th scope="col">項目</th><th scope="col">結果</th></tr></thead><tbody id="audit-log-list"></tbody></table><div id="empty-audit-logs" class="empty-state" hidden><strong>目前沒有操作紀錄</strong><span>之後的操作紀錄會依保留期限留存。</span></div></div>
         </section>
       </section>
 
@@ -269,7 +269,7 @@
         <div class="content-heading"><div><h2>網路狀態</h2><p class="muted">本機連線預設開啟；管理員可選擇性啟用同一區域網路內的 HTTPS 存取。</p></div></div>
         <div class="network-card card"><div class="network-status"><span class="status-dot"></span><div><strong>本機服務</strong><p id="network-endpoint" class="muted">讀取中…</p></div></div><div class="notice"><strong>網頁服務與 SMB 是不同連線</strong><p>本機網址只供這台電腦使用。區域網路 HTTPS 可讓其他裝置登入 Nanako；SMB 目前是實驗性功能，尚未整合伺服器、不會開始監聽或建立 Windows 分享。此處不會修改 Windows 防火牆或路由器。</p></div><h3>偵測到的網路介面卡</h3><ul id="interface-list" class="interface-list"></ul></div>
         <section class="card lan-access-card admin-only" aria-labelledby="lan-access-title">
-          <div class="content-heading"><div><h3 id="lan-access-title">區域網路登入</h3><p class="muted">只允許選取的私有 IPv4 網卡，使用 HTTPS；預設關閉，不會開放外網或設定路由器轉送。</p></div></div>
+          <div class="content-heading"><div><h3 id="lan-access-title">區域網路登入</h3><p class="muted">只允許選取的私人 IPv4 網路介面卡，使用 HTTPS；預設關閉，不會公開至網際網路或設定路由器轉送。</p></div></div>
           <div class="lan-access-controls">
             <label class="field-inline" for="lan-address">網路介面<select id="lan-address" aria-describedby="lan-address-error"></select><span id="lan-address-error" class="form-error lan-field-error" role="alert" hidden></span></label>
             <label class="field-inline" for="lan-port">服務連接埠<input id="lan-port" type="number" min="1024" max="65535" value="8765" inputmode="numeric" aria-describedby="lan-port-error"><span id="lan-port-error" class="form-error lan-field-error" role="alert" hidden></span></label>
@@ -282,11 +282,11 @@
           <div class="notice"><strong>其他裝置登入方式</strong><p>啟用後，讓其他裝置連上同一個 Wi‑Fi／區域網路，使用上方 HTTPS 網址開啟登入頁，再輸入 Nanako 帳號與密碼。首次連線會看到自簽憑證提示；請先比對此頁顯示的 SHA‑256 指紋。若 Windows 防火牆阻擋，需自行允許此程式／連接埠在「私人網路」接收連線。不要將路由器連接埠轉送到網際網路。</p></div>
         </section>
         <section class="card network-check-card" aria-labelledby="network-check-title">
-          <div class="content-heading"><div><h3 id="network-check-title">內網與外網檢測</h3><p class="muted">內網顯示本機介面與 Nanako 監聽位置；外網檢查網際網路連線與延遲。</p></div><button id="network-test-button" class="button secondary" type="button">重新檢測</button></div>
+          <div class="content-heading"><div><h3 id="network-check-title">本機與網際網路連線檢測</h3><p class="muted">檢視本機網路介面與 Nanako 監聽位置，並測試網際網路連線及延遲。</p></div><button id="network-test-button" class="button secondary" type="button">重新檢測</button></div>
           <p id="network-check-message" class="inline-message" role="status" aria-live="polite">尚未執行檢測。</p>
           <div class="network-check-grid">
-            <article><h4>內網環境</h4><p id="network-check-internal">尚未檢測</p><ul id="network-check-interfaces" class="interface-list"></ul></article>
-            <article><h4>外網連線</h4><p id="network-check-external">尚未檢測</p><small>手動檢測會連線至 Microsoft 網際網路連線測試端點；不會上傳檔案或查詢公開 IP。</small></article>
+            <article><h4>本機網路</h4><p id="network-check-internal">尚未檢測</p><ul id="network-check-interfaces" class="interface-list"></ul></article>
+            <article><h4>網際網路連線</h4><p id="network-check-external">尚未檢測</p><small>手動檢測會以 HTTP 讀取 Microsoft Windows NCSI 檢測檔 <code>http://www.msftconnecttest.com/connecttest.txt</code>，不是網站首頁。此結果只代表該端點可否連線，不保證所有網站都能連線；不會上傳檔案或查詢公開 IP。</small></article>
           </div>
         </section>
         <section id="smb-preflight" class="card smb-preflight admin-only" aria-labelledby="smb-preflight-title">
@@ -298,7 +298,7 @@
             </label>
             <p id="smb-experimental-message" class="inline-message" role="status" aria-live="polite">正在檢查此電腦是否符合啟用條件。</p>
           </div>
-          <p class="muted smb-experimental-disclaimer">此開關只保存實驗性功能選擇；Nanako SMB 伺服器尚未整合，因此不會開始監聽、建立分享、變更 Windows 服務或修改防火牆。</p>
+          <p class="muted smb-experimental-disclaimer">此開關只儲存實驗性功能選擇；Nanako SMB 伺服器尚未整合，因此不會開始監聽、建立分享、變更 Windows 服務或修改防火牆。</p>
           <details class="smb-preflight-details">
             <summary>Windows SMB 元件狀態</summary>
           <dl class="smb-status-grid">

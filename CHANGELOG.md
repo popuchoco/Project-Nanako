@@ -1,5 +1,11 @@
 # 版本紀錄
 
+## 0.3.0-rc.5 — 2026-11-10
+
+- 修正網際網路連線檢測：改用 Microsoft Windows NCSI 指定的 HTTP 檢測檔 `http://www.msftconnecttest.com/connecttest.txt`，並在介面中顯示完整路徑；結果只代表該端點可否連線，不保證所有網站都能連線。
+- 隱藏桌面捷徑欄的捲軸外觀，同時保留捲動功能。
+- 依臺灣繁體中文用語參考調整 README、網路檢測、網路介面卡設定、ZIP 進度及復原金鑰提示文字；新增本專案用語指南與四個參考來源。
+
 ## 0.3.0-rc.4 — 2026-11-10
 
 - 新增預設關閉的區域網路 HTTPS 網頁登入原型：管理員可選私有 IPv4 網卡／服務連接埠，伺服器端限制來源子網路並驗證 Host／Origin；登入 Cookie 僅在 TLS listener 加上 `Secure`。其他裝置登入後可透過 Nanako 網頁介面上傳、下載及管理已授權檔案。這是 HTTPS 網頁檔案存取，不是 SMB；TLS 私鑰由 Electron `safeStorage`（Windows DPAPI）加密保存，不自動修改防火牆或路由器。跨裝置與防火牆環境仍待實際驗收。

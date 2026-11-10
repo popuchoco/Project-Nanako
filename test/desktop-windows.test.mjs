@@ -29,6 +29,8 @@ test('Windows desktop chrome is integrated with the app bar and hides the native
   assert.match(styles, /\.electron-windows-titlebar \.system-bar\s*\{[^}]*-webkit-app-region:\s*drag/s);
   assert.match(styles, /\.electron-windows-titlebar \.system-bar :is\([^{}]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag/s);
   assert.match(styles, /\.desktop-shortcuts\{overflow-x:hidden;overflow-y:auto\}/);
+  assert.match(styles, /\.desktop-shortcuts\{scrollbar-width:none;-ms-overflow-style:none\}/);
+  assert.match(styles, /\.desktop-shortcuts::-webkit-scrollbar\{display:none;width:0;height:0\}/);
   assert.match(styles, /@media\(hover:hover\) and \(pointer:fine\)\{\.desktop-icon:hover\{[^}]*transition-delay:130ms\}/);
   assert.match(styles, /\.desktop-icon:focus-visible\{transition-delay:0ms\}/);
 });
@@ -56,6 +58,9 @@ test('desktop shell contains independent Nanako application-window regions and s
   assert.match(html, /id="file-sort"/);
   assert.match(html, /id="view-tasks"/);
   assert.match(html, /id="network-test-button"/);
+  assert.match(html, /http:\/\/www\.msftconnecttest\.com\/connecttest\.txt/);
+  assert.match(html, /不是網站首頁/);
+  assert.match(html, /不保證所有網站都能連線/);
   assert.match(html, /id="display-name-form"/);
   for (const category of ['image', 'video', 'audio', 'document']) assert.ok(html.includes(`data-file-category="${category}"`));
   assert.match(app, /windows:\s*new Map\(\)/);

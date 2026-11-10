@@ -1,7 +1,7 @@
 {
   "name": "project-nanako",
   "description": "Windows Electron 檔案空間原型，提供本機帳號與權限、桌面操作、傳輸監看及預設關閉的 HTTPS 區域網路網頁登入；SMB 分享仍在開發。",
-  "version": "0.3.0-rc.4",
+  "version": "0.3.0-rc.5",
   "license": "MPL-2.0",
   "private": true,
   "type": "module",
