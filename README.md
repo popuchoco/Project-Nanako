@@ -2,7 +2,7 @@
 
 以 Windows 電腦為主的本機檔案空間原型。Nanako 提供桌面操作介面、本機帳號與檔案權限，也可選擇讓同一私人網路中的其他裝置透過瀏覽器存取檔案。
 
-> **目前版本：`0.3.0-rc.5`（預先發行測試版）**｜[下載 Windows x64 版本](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.5)｜[檢視版本紀錄](CHANGELOG.md)
+> **目前版本：`0.3.0-rc.6`（預先發行測試版）**｜[下載 Windows x64 版本](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.6)｜[檢視版本紀錄](CHANGELOG.md)
 
 Nanako 仍在開發中，並非可直接取代正式 NAS 的產品。特別是 **SMB 檔案分享尚未實作**；目前的 SMB 實驗性開關不會建立分享或啟動 SMB 服務。
 
@@ -38,7 +38,7 @@ SMB 是另一種網路存取方式，預期用於 Windows 檔案總管的網路�
 
 ## 下載與啟動
 
-前往 [`v0.3.0-rc.5` 發行頁面](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.5)，選擇適合的 Windows x64 套件：
+前往 [`v0.3.0-rc.6` 發行頁面](https://github.com/popuchoco/Project-Nanako/releases/tag/v0.3.0-rc.6)，選擇適合的 Windows x64 套件：
 
 - **Portable**：免安裝，執行檔與 `NanakoData` 放在同一位置。
 - **Setup**：單一使用者安裝程式，資料放在該使用者的應用程式資料目錄。

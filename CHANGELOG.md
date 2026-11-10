@@ -1,5 +1,10 @@
 # 版本紀錄
 
+## 0.3.0-rc.6 — 2026-11-10
+
+- 縮短 Windows 可攜式執行檔的檔案描述；專案完整介紹仍保留於 README 與 GitHub 專案說明。
+- 更新 GitHub 專案說明，明確指出支援 HTTPS 區域網路網頁上傳與下載，不再將此功能與 SMB 混為一談。
+
 ## 0.3.0-rc.5 — 2026-11-10
 
 - 修正網際網路連線檢測：改用 Microsoft Windows NCSI 指定的 HTTP 檢測檔 `http://www.msftconnecttest.com/connecttest.txt`，並在介面中顯示完整路徑；結果只代表該端點可否連線，不保證所有網站都能連線。
